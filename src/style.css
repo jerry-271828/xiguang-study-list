@@ -189,9 +189,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .wheel-stage { width: min(80vw, 390px); aspect-ratio: 1; margin: 30px auto 24px; position: relative; }
 .wheel-pointer { position: absolute; z-index: 2; top: -11px; left: 50%; width: 1px; height: 38px; background: var(--ink); }
 .wheel-pointer::after { content: ''; position: absolute; bottom: 0; left: -4px; width: 9px; height: 9px; background: var(--ink); transform: rotate(45deg); }
-.wheel { width: 100%; height: 100%; position: relative; border: 1px solid var(--ink); border-radius: 50%; transition: transform 3.4s cubic-bezier(.13,.67,.12,1); background: repeating-conic-gradient(from 0deg, transparent 0deg 44deg, var(--line) 44.5deg 45deg); }
+.wheel { width: 100%; height: 100%; position: relative; border: 1px solid var(--ink); border-radius: 50%; background: repeating-conic-gradient(from -22.5deg, transparent 0deg 44deg, var(--line) 44.5deg 45deg); }
 .wheel::after { content: ''; position: absolute; inset: 16%; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); }
-.wheel > span { position: absolute; z-index: 1; left: var(--x); top: var(--y); width: 4.6em; transform: translate(-50%, -50%); color: var(--muted); font: 10px 'Noto Serif SC'; letter-spacing: .08em; line-height: 1; text-align: center; white-space: nowrap; }
+.wheel-labels { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.wheel-labels text { fill: var(--muted); stroke: none; font: 3px 'Noto Serif SC'; letter-spacing: .18px; text-anchor: middle; }
 .wheel > i { position: absolute; z-index: 2; inset: 39%; display: grid; place-items: center; border: 1px solid var(--ink); border-radius: 50%; background: var(--paper); font: normal 12px 'Noto Serif SC'; letter-spacing: .15em; }
 .wheel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .wheel-actions button { min-height: 48px; border: 1px solid var(--ink); font-size: 11px; letter-spacing: .08em; }

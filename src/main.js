@@ -169,7 +169,8 @@ let previousView = 'day';
 let menuOpen = false;
 let pageMotion = '';
 let wheelResult = '';
-let wheelRotation = 0;
+let wheelOffset = 0;
+let wheelSpinning = false;
 let statsReturnDate = new Date(START);
 
 const icons = {
@@ -400,16 +401,26 @@ function availableSpins() {
 
 function wheelView() {
   const record = spinRecord();
-  const segments = ['未中', '免任务', '未中', '免任务', '未中', '免周六', '未中', '免一天'];
-  const wheelLabels = segments.map((segment, index) => {
-    const angle = (index + .5) * 45 * Math.PI / 180;
-    const left = 50 + Math.sin(angle) * 40.5;
-    const top = 50 - Math.cos(angle) * 40.5;
-    return `<span style="--x:${left.toFixed(2)}%;--y:${top.toFixed(2)}%">${segment}</span>`;
-  }).join('');
+  const baseSegments = ['未中', '免任务', '未中', '免任务', '未中', '免周六', '免一周', '免一天'];
+  const segments = baseSegments.map((_, index) => baseSegments[(index + wheelOffset) % baseSegments.length]);
+  const wheelLabels = `<svg class="wheel-labels" viewBox="0 0 100 100" aria-hidden="true">
+    <defs>${segments.map((_, index) => {
+      let startAngle = index * 45 - 17;
+      let endAngle = index * 45 + 17;
+      const reverse = index >= 3 && index <= 5;
+      if (reverse) [startAngle, endAngle] = [endAngle, startAngle];
+      const radius = 42;
+      const startX = 50 + radius * Math.sin(startAngle * Math.PI / 180);
+      const startY = 50 - radius * Math.cos(startAngle * Math.PI / 180);
+      const endX = 50 + radius * Math.sin(endAngle * Math.PI / 180);
+      const endY = 50 - radius * Math.cos(endAngle * Math.PI / 180);
+      return `<path id="wheel-path-${index}" d="M ${startX.toFixed(2)} ${startY.toFixed(2)} A ${radius} ${radius} 0 0 ${reverse ? 0 : 1} ${endX.toFixed(2)} ${endY.toFixed(2)}" />`;
+    }).join('')}</defs>
+    ${segments.map((segment, index) => `<text><textPath href="#wheel-path-${index}" startOffset="50%">${segment}</textPath></text>`).join('')}
+  </svg>`;
   return `<main class="page wheel-page">${header('摸鱼转盘')}
     <section class="wheel-head"><small>今日剩余 ${availableSpins()} 次</small><h1>让一点好运，替你松开时间。</h1></section>
-    <div class="wheel-stage"><div class="wheel-pointer"></div><div class="wheel" style="transform:rotate(${wheelRotation}deg)">${wheelLabels}<i>隙光</i></div></div>
+    <div class="wheel-stage"><div class="wheel-pointer"></div><div class="wheel">${wheelLabels}<i>隙光</i></div></div>
     <div class="wheel-actions">
       <button class="primary" data-action="spin" ${availableSpins() <= 0 ? 'disabled' : ''}>转动一次</button>
       <button data-action="exam-spin" ${data.examBonusUsed >= 3 ? 'disabled' : ''}>确认完成试卷 · ${data.examBonusUsed}/3</button>
@@ -493,17 +504,44 @@ function applyPrize(prize) {
 
 function performSpin(isBonus = false) {
   const record = spinRecord();
-  if (availableSpins() <= 0) return;
+  if (availableSpins() <= 0 || wheelSpinning) return;
   if (isBonus) record.bonusUsed++;
   else if (!record.regularUsed) record.regularUsed = true;
   else record.bonusUsed++;
   const prize = choosePrize();
   const result = applyPrize(prize);
   record.results.push({ ...prize, result, at: Date.now() });
-  wheelRotation += 1440 + Math.floor(Math.random() * 360);
-  wheelResult = result;
   save();
-  render();
+  const candidateIndices = prize.type === 'none' ? [0, 2, 4]
+    : prize.type === 'task' ? [1, 3]
+    : prize.type === 'saturday' ? [5]
+    : prize.type === 'week' ? [6]
+    : [7];
+  const targetOffset = candidateIndices[Math.floor(Math.random() * candidateIndices.length)];
+  const relativeIndex = (targetOffset - wheelOffset + 8) % 8;
+  const wheel = document.querySelector('.wheel');
+  const spinButton = document.querySelector('[data-action="spin"]');
+  const examButton = document.querySelector('[data-action="exam-spin"]');
+  wheelSpinning = true;
+  if (spinButton) spinButton.disabled = true;
+  if (examButton) examButton.disabled = true;
+  if (!wheel?.animate) {
+    wheelOffset = targetOffset;
+    wheelResult = result;
+    wheelSpinning = false;
+    render();
+    return;
+  }
+  const animation = wheel.animate(
+    [{ transform: 'rotate(0deg)' }, { transform: `rotate(${-1440 - relativeIndex * 45}deg)` }],
+    { duration: 2800, easing: 'cubic-bezier(.13,.67,.12,1)', fill: 'forwards' }
+  );
+  animation.finished.finally(() => {
+    wheelOffset = targetOffset;
+    wheelResult = result;
+    wheelSpinning = false;
+    render();
+  });
 }
 
 function render() {
