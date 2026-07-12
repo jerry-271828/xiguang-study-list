@@ -401,9 +401,15 @@ function availableSpins() {
 function wheelView() {
   const record = spinRecord();
   const segments = ['未中', '免任务', '未中', '免任务', '未中', '免周六', '未中', '免一天'];
+  const wheelLabels = segments.map((segment, index) => {
+    const angle = (index + .5) * 45 * Math.PI / 180;
+    const left = 50 + Math.sin(angle) * 40.5;
+    const top = 50 - Math.cos(angle) * 40.5;
+    return `<span style="--x:${left.toFixed(2)}%;--y:${top.toFixed(2)}%">${segment}</span>`;
+  }).join('');
   return `<main class="page wheel-page">${header('摸鱼转盘')}
     <section class="wheel-head"><small>今日剩余 ${availableSpins()} 次</small><h1>让一点好运，替你松开时间。</h1></section>
-    <div class="wheel-stage"><div class="wheel-pointer"></div><div class="wheel" style="transform:rotate(${wheelRotation}deg)">${segments.map((segment, index) => `<span style="--i:${index}">${segment}</span>`).join('')}<i>隙光</i></div></div>
+    <div class="wheel-stage"><div class="wheel-pointer"></div><div class="wheel" style="transform:rotate(${wheelRotation}deg)">${wheelLabels}<i>隙光</i></div></div>
     <div class="wheel-actions">
       <button class="primary" data-action="spin" ${availableSpins() <= 0 ? 'disabled' : ''}>转动一次</button>
       <button data-action="exam-spin" ${data.examBonusUsed >= 3 ? 'disabled' : ''}>确认完成试卷 · ${data.examBonusUsed}/3</button>
