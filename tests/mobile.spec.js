@@ -98,6 +98,42 @@ test('supports repeated touch swipes without moving the page canvas', async ({ p
   }
 });
 
+test('claims horizontal swipes before browser navigation but preserves vertical scrolling', async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = (x, y) => new Touch({ identifier: 1, target, clientX: x, clientY: y });
+    const dispatch = (type, touches, changedTouches = touches) => target.dispatchEvent(new TouchEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      touches,
+      targetTouches: touches,
+      changedTouches
+    }));
+
+    const horizontalStart = touch(12, 360);
+    dispatch('touchstart', [horizontalStart]);
+    const horizontalMoveAllowed = dispatch('touchmove', [touch(90, 362)]);
+    dispatch('touchcancel', [], [touch(90, 362)]);
+
+    const verticalStart = touch(190, 360);
+    dispatch('touchstart', [verticalStart]);
+    const verticalMoveAllowed = dispatch('touchmove', [touch(192, 440)]);
+    dispatch('touchcancel', [], [touch(192, 440)]);
+
+    return {
+      horizontalMoveAllowed,
+      verticalMoveAllowed,
+      appTouchAction: getComputedStyle(target).touchAction,
+      bodyOverscrollX: getComputedStyle(document.body).overscrollBehaviorX
+    };
+  });
+
+  expect(result.horizontalMoveAllowed).toBe(false);
+  expect(result.verticalMoveAllowed).toBe(true);
+  expect(result.appTouchAction).toBe('pan-y');
+  expect(result.bodyOverscrollX).toBe('none');
+});
+
 test('removes the unsolicited start shortcut but keeps weekly-summary return', async ({ page }) => {
   await expect(page.getByRole('button', { name: '回到起点' })).toHaveCount(0);
 

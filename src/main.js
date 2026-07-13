@@ -713,14 +713,15 @@ app.addEventListener('input', event => {
 });
 
 let gesture = null;
-function isInputTarget(target) { return Boolean(target.closest('input, textarea, [contenteditable], button')); }
+const SWIPE_AXIS_THRESHOLD = 8;
+function isInputTarget(target) { return Boolean(target.closest('input, textarea, [contenteditable]')); }
 app.addEventListener('touchstart', event => {
   if (event.touches.length === 2) {
     const [first, second] = event.touches;
     gesture = { pinch: true, startDistance: Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY) };
     event.preventDefault();
   } else if (event.touches.length === 1 && !isInputTarget(event.target)) {
-    gesture = { pinch: false, x: event.touches[0].clientX, y: event.touches[0].clientY };
+    gesture = { pinch: false, x: event.touches[0].clientX, y: event.touches[0].clientY, axis: null };
   }
 }, { passive: false });
 
@@ -729,6 +730,14 @@ app.addEventListener('touchmove', event => {
     const [first, second] = event.touches;
     gesture.lastDistance = Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
     event.preventDefault();
+  } else if (gesture && !gesture.pinch && event.touches.length === 1) {
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - gesture.x;
+    const deltaY = touch.clientY - gesture.y;
+    if (!gesture.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= SWIPE_AXIS_THRESHOLD) {
+      gesture.axis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
+    }
+    if (gesture.axis === 'horizontal') event.preventDefault();
   }
 }, { passive: false });
 
@@ -746,6 +755,8 @@ app.addEventListener('touchend', event => {
   }
   gesture = null;
 }, { passive: true });
+
+app.addEventListener('touchcancel', () => { gesture = null; });
 
 window.addEventListener('beforeunload', () => localStorage.setItem(STORE_KEY, JSON.stringify(data)));
 render();
