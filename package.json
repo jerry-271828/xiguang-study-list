@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "test:mobile": "node --require ./scripts/playwright-openharmony.cjs ./node_modules/@playwright/test/cli.js test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "rollup": "npm:@rollup/wasm-node@^4.62.2",
     "vite": "^7.0.0"
   }
 }

@@ -107,12 +107,13 @@ function itemStatus(date, index) {
 }
 
 function setItemStatus(date, index) {
-  if (itemStatus(date, index) === 'exempt') return;
+  if (itemStatus(date, index) === 'exempt') return 'exempt';
   const record = dayRecord(date);
   const current = record.items[index]?.status || 'open';
   const next = current === 'open' || current === 'missed' ? 'done' : 'missed';
   record.items[index] = { ...record.items[index], status: next };
   save();
+  return next;
 }
 
 function weekDates(date) {
@@ -189,15 +190,15 @@ const isLiked = date => Boolean(data.likes[dateKey(date)]);
 
 function header(title = '') {
   return `<header class="topbar">
-    <button class="icon-button menu-trigger" data-action="menu" aria-label="展开工具栏">${menuOpen ? icons.close : icons.menu}</button>
+    <button class="icon-button menu-trigger" data-action="menu" aria-label="${menuOpen ? '收起' : '展开'}工具栏" aria-expanded="${menuOpen}" aria-controls="menu-sheet">${menuOpen ? icons.close : icons.menu}</button>
     ${title ? `<div class="view-title">${title}</div>` : '<div></div>'}
-    <button class="date-pill" data-action="today">回到起点</button>
+    <span class="topbar-spacer" aria-hidden="true"></span>
   </header>`;
 }
 
 function toolbar() {
   const onSundayStats = currentView === 'day' && selectedDate.getDay() === 0;
-  return `<div class="menu-sheet ${menuOpen ? 'is-open' : ''}">
+  return `<div id="menu-sheet" class="menu-sheet ${menuOpen ? 'is-open' : ''}" aria-hidden="${!menuOpen}">
     <div class="menu-head"><span>隙光</span><small>2026 · 盛夏清单</small><button data-action="close-menu" aria-label="收起工具栏">${icons.close}</button></div>
     <nav>
       <button data-nav="day"><i>日</i><span>日视图</span></button>
@@ -216,15 +217,23 @@ function quoteBlock(date) {
     <button class="quote" data-action="copy-quote" aria-label="复制今日赠语">
       <span class="quote-mark">“</span><span>${quoteFor(date)}</span><small>${icons.copy} 轻触复制</small>
     </button>
-    <button class="like ${isLiked(date) ? 'is-liked' : ''}" data-action="like" aria-label="收藏赠语">${icons.heart}</button>
+    <button class="like ${isLiked(date) ? 'is-liked' : ''}" data-action="like" aria-label="收藏赠语" aria-pressed="${isLiked(date)}">${icons.heart}</button>
   </section>`;
+}
+
+function statusMeta(status) {
+  return {
+    label: status === 'done' || status === 'exempt' ? '已完成' : status === 'missed' ? '未完成' : '标记完成',
+    icon: status === 'missed' ? icons.warn : icons.check,
+    pressed: status === 'done' || status === 'exempt'
+  };
 }
 
 function statusButton(date, index, large = false) {
   const status = itemStatus(date, index);
-  const label = status === 'done' || status === 'exempt' ? '已完成' : status === 'missed' ? '未完成' : '标记完成';
-  return `<button class="status-button ${large ? 'large' : ''}" data-status-index="${index}" aria-label="${label}">
-    ${status === 'missed' ? icons.warn : icons.check}
+  const meta = statusMeta(status);
+  return `<button class="status-button ${large ? 'large' : ''}" data-status-index="${index}" aria-label="${meta.label}" aria-pressed="${meta.pressed}">
+    ${meta.icon}
   </button>`;
 }
 
@@ -239,7 +248,7 @@ function weekdayItems(date) {
     } else if (item.editable === 'suffix') {
       content = `<span>${item.text}</span><input class="line-input" data-extra-index="${index}" value="${escapeHtml(extra)}" aria-label="补充第 ${index + 1} 项" />${item.tail ? `<span>${item.tail}</span>` : ''}`;
     } else content = `<span>${item.text}</span>`;
-    return `<div class="task ${status}" data-task-index="${index}">
+    return `<div class="task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
       <div class="task-content">${content}</div>
       ${statusButton(date, index)}
@@ -251,7 +260,7 @@ function saturdayItems(date) {
   const record = dayRecord(date);
   return record.saturday.map((text, index) => {
     const status = itemStatus(date, index);
-    return `<div class="task saturday-task ${status}" data-task-index="${index}">
+    return `<div class="task saturday-task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
       <textarea rows="1" data-saturday-index="${index}" aria-label="第 ${index + 1} 项">${escapeHtml(text)}</textarea>
       ${statusButton(date, index, true)}
@@ -311,9 +320,9 @@ function sundayView(date) {
   </main>`;
 }
 
-function miniDay(date) {
+function miniDay(date, index) {
   const stats = computeStats([date]);
-  return `<button class="mini-day ${dateKey(date) === dateKey(selectedDate) ? 'selected' : ''} ${!inRange(date) ? 'muted' : ''}" data-date="${dateKey(date)}" ${!inRange(date) ? 'disabled' : ''}>
+  return `<button class="mini-day ${dateKey(date) === dateKey(selectedDate) ? 'selected' : ''} ${!inRange(date) ? 'muted' : ''}" data-date="${dateKey(date)}" style="--item-order:${index}" ${!inRange(date) ? 'disabled' : ''}>
     <span>${WEEKDAYS[date.getDay()]}</span><strong>${date.getDate()}</strong>
     <i><b style="width:${stats.total ? stats.done / stats.total * 100 : 0}%"></b></i>
     <small>${stats.done}/${stats.total}</small>
@@ -339,10 +348,10 @@ function monthView() {
   return `<main class="page overview-page month-page">${header('月视图')}
     <section class="month-head"><button data-action="prev-month" ${month === 6 ? 'disabled' : ''}>${icons.arrow}</button><div><small>2026</small><h1>${month + 1} 月</h1></div><button data-action="next-month" ${month === 7 ? 'disabled' : ''}>${icons.arrow}</button></section>
     <div class="month-weekdays">${['一','二','三','四','五','六','日'].map(day => `<span>${day}</span>`).join('')}</div>
-    <div class="month-grid">${dates.map(date => {
+    <div class="month-grid">${dates.map((date, index) => {
       const stats = computeStats([date]);
       const available = inRange(date) && date.getMonth() === month;
-      return `<button data-date="${dateKey(date)}" class="calendar-day ${available ? '' : 'muted'} ${dateKey(date) === dateKey(selectedDate) ? 'selected' : ''}" ${available ? '' : 'disabled'}><span>${date.getDate()}</span><i class="${stats.missed ? 'has-missed' : ''}">${stats.total ? Math.round(stats.done / stats.total * 100) : ''}</i></button>`;
+      return `<button data-date="${dateKey(date)}" class="calendar-day ${available ? '' : 'muted'} ${dateKey(date) === dateKey(selectedDate) ? 'selected' : ''}" style="--item-order:${index % 7}" ${available ? '' : 'disabled'}><span>${date.getDate()}</span><i class="${stats.missed ? 'has-missed' : ''}">${stats.total ? Math.round(stats.done / stats.total * 100) : ''}</i></button>`;
     }).join('')}</div>
     <div class="month-legend"><span><i></i>完成度</span><span><i class="missed"></i>有未完成项</span></div>
   </main>`;
@@ -379,7 +388,7 @@ function favoritesView() {
   const favorites = allDates.filter(date => isLiked(date)).sort((first, second) => data.likeTimes[dateKey(first)] - data.likeTimes[dateKey(second)]);
   return `<main class="page favorites-page">${header('赠语收藏')}
     <section class="favorites-head"><small>${favorites.length} 则</small><h1>被你留下的句子</h1></section>
-    <div class="favorite-list">${favorites.length ? favorites.map((date, index) => `<article><span>${String(index + 1).padStart(2, '0')}</span><button data-copy-date="${dateKey(date)}">${quoteFor(date)}</button><small>${formatDate(date)}</small><button class="remove-like" data-like-date="${dateKey(date)}" aria-label="取消收藏">${icons.heart}</button></article>`).join('') : '<div class="empty-state"><span>♡</span><p>喜欢的赠语，会在这里悄悄汇集。</p></div>'}</div>
+    <div class="favorite-list">${favorites.length ? favorites.map((date, index) => `<article style="--item-order:${index}"><span>${String(index + 1).padStart(2, '0')}</span><button data-copy-date="${dateKey(date)}">${quoteFor(date)}</button><small>${formatDate(date)}</small><button class="remove-like" data-like-date="${dateKey(date)}" aria-label="取消收藏">${icons.heart}</button></article>`).join('') : '<div class="empty-state"><span>♡</span><p>喜欢的赠语，会在这里悄悄汇集。</p></div>'}</div>
   </main>`;
 }
 
@@ -420,7 +429,7 @@ function wheelView() {
   </svg>`;
   return `<main class="page wheel-page">${header('摸鱼转盘')}
     <section class="wheel-head"><small>今日剩余 ${availableSpins()} 次</small><h1>让一点好运，替你松开时间。</h1></section>
-    <div class="wheel-stage"><div class="wheel-pointer"></div><div class="wheel">${wheelLabels}<i>隙光</i></div></div>
+    <div class="wheel-stage"><div class="wheel-pointer" aria-hidden="true"><svg viewBox="0 0 44 62"><path class="pointer-tail" d="M17.5 27.5 22 59l4.5-31.5Z"/><circle class="pointer-ring" cx="22" cy="17" r="13"/><circle class="pointer-core" cx="22" cy="17" r="5"/><circle class="pointer-glint" cx="20.4" cy="15.4" r="1.2"/></svg></div><div class="wheel">${wheelLabels}<i>隙光</i></div></div>
     <div class="wheel-actions">
       <button class="primary" data-action="spin" ${availableSpins() <= 0 ? 'disabled' : ''}>转动一次</button>
       <button data-action="exam-spin" ${data.examBonusUsed >= 3 ? 'disabled' : ''}>确认完成试卷 · ${data.examBonusUsed}/3</button>
@@ -520,9 +529,11 @@ function performSpin(isBonus = false) {
   const targetOffset = candidateIndices[Math.floor(Math.random() * candidateIndices.length)];
   const relativeIndex = (targetOffset - wheelOffset + 8) % 8;
   const wheel = document.querySelector('.wheel');
+  const pointer = document.querySelector('.wheel-pointer');
   const spinButton = document.querySelector('[data-action="spin"]');
   const examButton = document.querySelector('[data-action="exam-spin"]');
   wheelSpinning = true;
+  pointer?.classList.add('is-spinning');
   if (spinButton) spinButton.disabled = true;
   if (examButton) examButton.disabled = true;
   if (!wheel?.animate) {
@@ -555,6 +566,32 @@ function render() {
   app.innerHTML = `${content}${toolbar()}<div id="toast" class="toast"></div>`;
   pageMotion = '';
   autoGrowTextareas();
+}
+
+function syncTaskStatus(button, status) {
+  const task = button.closest('.task');
+  if (!task) return;
+  const meta = statusMeta(status);
+  task.classList.remove('open', 'done', 'missed', 'exempt');
+  task.classList.add(status);
+  button.setAttribute('aria-label', meta.label);
+  button.setAttribute('aria-pressed', String(meta.pressed));
+  button.innerHTML = meta.icon;
+}
+
+function setMenuVisibility(open) {
+  menuOpen = open;
+  const sheet = document.querySelector('.menu-sheet');
+  const scrim = document.querySelector('.menu-scrim');
+  const trigger = document.querySelector('.menu-trigger');
+  sheet?.classList.toggle('is-open', open);
+  sheet?.setAttribute('aria-hidden', String(!open));
+  scrim?.classList.toggle('is-open', open);
+  if (trigger) {
+    trigger.innerHTML = open ? icons.close : icons.menu;
+    trigger.setAttribute('aria-label', `${open ? '收起' : '展开'}工具栏`);
+    trigger.setAttribute('aria-expanded', String(open));
+  }
 }
 
 function toast(message) {
@@ -606,8 +643,8 @@ app.addEventListener('click', event => {
   const dateElement = event.target.closest('[data-date]');
   const statusElement = event.target.closest('[data-status-index]');
   if (statusElement) {
-    setItemStatus(selectedDate, Number(statusElement.dataset.statusIndex));
-    render(); return;
+    const status = setItemStatus(selectedDate, Number(statusElement.dataset.statusIndex));
+    syncTaskStatus(statusElement, status); return;
   }
   if (dateElement && !dateElement.disabled) {
     selectedDate = fromKey(dateElement.dataset.date);
@@ -624,9 +661,8 @@ app.addEventListener('click', event => {
     return;
   }
   const action = actionElement.dataset.action;
-  if (action === 'menu') { menuOpen = !menuOpen; render(); }
-  if (action === 'close-menu') { menuOpen = false; render(); }
-  if (action === 'today') { selectedDate = new Date(START); currentView = 'day'; render(); }
+  if (action === 'menu') setMenuVisibility(!menuOpen);
+  if (action === 'close-menu') setMenuVisibility(false);
   if (action === 'prev-day') switchDay(-1);
   if (action === 'next-day') switchDay(1);
   if (action === 'copy-quote') copyText(quoteFor(selectedDate));
@@ -634,7 +670,10 @@ app.addEventListener('click', event => {
     const key = dateKey(selectedDate);
     if (data.likes[key]) { delete data.likes[key]; delete data.likeTimes[key]; }
     else { data.likes[key] = true; data.likeTimes[key] = Date.now(); }
-    save(); render();
+    const liked = Boolean(data.likes[key]);
+    actionElement.classList.toggle('is-liked', liked);
+    actionElement.setAttribute('aria-pressed', String(liked));
+    save();
   }
   if (action === 'return-day') { selectedDate = new Date(statsReturnDate); currentView = previousView; render(); }
   if (action === 'prev-month') { selectedDate = new Date(2026, 6, 13); render(); }

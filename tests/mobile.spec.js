@@ -1,0 +1,118 @@
+import { expect, test } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+});
+
+test('does not replace untouched tasks when one status changes', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__untouchedTask = document.querySelector('[data-task-index="1"]');
+  });
+
+  await page.locator('[data-status-index="0"]').click();
+
+  await expect(page.locator('[data-task-index="0"]')).toHaveClass(/done/);
+  expect(await page.evaluate(() => window.__untouchedTask === document.querySelector('[data-task-index="1"]'))).toBe(true);
+});
+
+test('keeps the day DOM stable while toggling the menu and quote favorite', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__stableTask = document.querySelector('[data-task-index="0"]');
+  });
+
+  await page.locator('[data-action="menu"]').click();
+  await expect(page.locator('.menu-sheet')).toHaveClass(/is-open/);
+  expect(await page.evaluate(() => window.__stableTask === document.querySelector('[data-task-index="0"]'))).toBe(true);
+
+  await page.locator('.menu-head [data-action="close-menu"]').click();
+  await page.locator('[data-action="like"]').click();
+  await expect(page.locator('[data-action="like"]')).toHaveClass(/is-liked/);
+  expect(await page.evaluate(() => window.__stableTask === document.querySelector('[data-task-index="0"]'))).toBe(true);
+});
+
+test('keeps missed task geometry inside the original row', async ({ page }) => {
+  const task = page.locator('[data-task-index="0"]');
+  const initial = await task.boundingBox();
+
+  await page.locator('[data-status-index="0"]').click();
+  await page.locator('[data-status-index="0"]').click();
+  await expect(task).toHaveClass(/missed/);
+  await page.waitForTimeout(450);
+  const missed = await task.boundingBox();
+
+  expect(Math.abs(missed.x - initial.x)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(missed.width - initial.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(missed.height - initial.height)).toBeLessThanOrEqual(0.5);
+});
+
+test('keeps the page canvas anchored during rapid mobile paging', async ({ page }) => {
+  const samples = [];
+  for (let turn = 0; turn < 5; turn += 1) {
+    await page.locator('[data-action="next-day"]').click();
+    samples.push(...await page.evaluate(async () => {
+      const frames = [];
+      for (let frame = 0; frame < 4; frame += 1) {
+        await new Promise(requestAnimationFrame);
+        const pageElement = document.querySelector('.page');
+        const rect = pageElement.getBoundingClientRect();
+        frames.push({
+          left: rect.left,
+          right: rect.right,
+          width: rect.width,
+          viewport: innerWidth,
+          transform: getComputedStyle(pageElement).transform
+        });
+      }
+      return frames;
+    }));
+  }
+
+  for (const frame of samples) {
+    expect(Math.abs(frame.left)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(frame.right - frame.viewport)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(frame.width - frame.viewport)).toBeLessThanOrEqual(0.5);
+    expect(frame.transform).toBe('none');
+  }
+});
+
+test('supports repeated touch swipes without moving the page canvas', async ({ page }) => {
+  for (let turn = 0; turn < 4; turn += 1) {
+    await page.evaluate(() => {
+      const target = document.querySelector('#app');
+      const start = new Touch({ identifier: 1, target, clientX: 340, clientY: 360 });
+      const end = new Touch({ identifier: 1, target, clientX: 35, clientY: 362 });
+      target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+      target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+    });
+    await expect(page.locator('.date-heading strong')).toBeVisible();
+    const canvas = await page.locator('.page').evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width, viewport: innerWidth, transform: getComputedStyle(element).transform };
+    });
+    expect(Math.abs(canvas.left)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(canvas.right - canvas.viewport)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(canvas.width - canvas.viewport)).toBeLessThanOrEqual(0.5);
+    expect(canvas.transform).toBe('none');
+  }
+});
+
+test('removes the unsolicited start shortcut but keeps weekly-summary return', async ({ page }) => {
+  await expect(page.getByRole('button', { name: '回到起点' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: /本周小结/ }).click();
+  await expect(page.getByRole('button', { name: /返回日清单/ }).last()).toBeVisible();
+
+  await page.getByRole('button', { name: /返回日清单/ }).last().click();
+  await expect(page.locator('.task-list')).toBeVisible();
+});
+
+test('uses the refined wheel pointer and view-level motion', async ({ page }) => {
+  await page.locator('[data-action="menu"]').click();
+  await page.getByRole('button', { name: /摸鱼转盘/ }).click();
+
+  await expect(page.locator('.wheel-pointer svg')).toBeVisible();
+  await expect(page.locator('.pointer-ring')).toHaveCount(1);
+  expect(await page.locator('.wheel-stage').evaluate(element => getComputedStyle(element).animationName)).toBe('wheelEnter');
+});
