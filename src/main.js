@@ -663,6 +663,7 @@ async function copyText(text) {
 }
 
 function changeView(view) {
+  activePageTurn?.finishImmediately(false);
   if (view === 'sunday') {
     previousView = currentView === 'day' ? 'day' : currentView;
     statsReturnDate = new Date(selectedDate);
@@ -797,7 +798,6 @@ function autoGrowTextareas() {
 }
 
 let activePageTurn = null;
-let activePageTurnTimer = 0;
 let pageTurnStyles = '';
 
 function serializedPageStyles() {
@@ -823,23 +823,46 @@ function clonePageSnapshot(source) {
   return snapshot;
 }
 
-function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
-  activePageTurn?.remove();
-  clearTimeout(activePageTurnTimer);
+function pageSnapshotForDate(date) {
+  const currentDate = selectedDate;
+  selectedDate = new Date(date);
+  const template = document.createElement('template');
+  template.innerHTML = dayView().trim();
+  selectedDate = currentDate;
+  const snapshot = template.content.firstElementChild;
+  snapshot?.classList.add('page-turn-snapshot');
+  return snapshot;
+}
 
-  const newRect = newPage.getBoundingClientRect();
+function preparePageTurnSnapshot(snapshot) {
+  snapshot.querySelectorAll('.line-input').forEach(autoGrowLineInput);
+  snapshot.querySelectorAll('.saturday-task textarea').forEach(element => {
+    element.style.height = 'auto';
+    element.style.height = `${element.scrollHeight}px`;
+  });
+}
+
+function createPageTurn(oldPage, targetDate, direction) {
+  const oldRect = oldPage.getBoundingClientRect();
+  const oldSnapshot = clonePageSnapshot(oldPage);
+  const targetSnapshot = pageSnapshotForDate(targetDate);
+  if (!targetSnapshot) return null;
+  const ghostSnapshot = oldSnapshot.cloneNode(true);
+  ghostSnapshot.classList.add('page-turn-ghost');
+
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+  host.dataset.pageTurnTranslucent = 'true';
   host.setAttribute('aria-hidden', 'true');
   host.inert = true;
   Object.assign(host.style, {
     position: 'fixed',
     zIndex: '30',
     left: `${oldRect.left}px`,
-    top: `${Math.min(oldRect.top, newRect.top)}px`,
+    top: `${oldRect.top}px`,
     width: `${oldRect.width}px`,
-    height: `${Math.max(oldRect.height, newRect.height)}px`,
+    height: `${oldRect.height}px`,
     pointerEvents: 'none',
     overflow: 'visible'
   });
@@ -862,16 +885,22 @@ function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
     .page-turn-front { z-index:2; }
     .page-turn-back {
       transform:rotateY(180deg);
-      background:
-        linear-gradient(90deg, rgba(52,47,39,.18), rgba(52,47,39,.035) 12%, rgba(255,255,255,.22) 72%, rgba(52,47,39,.05)),
-        var(--paper);
+      background:var(--paper);
     }
     .page-turn-back::before {
       content:'';
       position:absolute;
+      z-index:2;
       inset:0;
-      opacity:.22;
+      opacity:.3;
       background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
+    }
+    .page-turn-back::after {
+      content:'';
+      position:absolute;
+      z-index:3;
+      inset:0;
+      background:linear-gradient(90deg, rgba(52,47,39,.09), rgba(246,243,235,.6) 13%, rgba(246,243,235,.54) 78%, rgba(255,255,255,.7));
     }
     .page-turn-leaf::after {
       content:'';
@@ -883,7 +912,7 @@ function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
       width:9px;
       background:linear-gradient(90deg, rgba(52,47,39,.11), rgba(255,255,255,.68) 48%, rgba(52,47,39,.08));
       transform:translateZ(1px);
-      opacity:.72;
+      opacity:var(--edge-opacity, .72);
     }
     .page-turn-snapshot.page {
       width:100%;
@@ -894,21 +923,21 @@ function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
       box-shadow:none;
     }
     .page-turn-snapshot.page::before { position:absolute; }
-    .page-turn-leaf.next { animation:shadowNext .78s cubic-bezier(.2,.72,.18,1) both; }
-    .page-turn-leaf.prev { transform:rotateY(-89deg); animation:shadowPrev .78s cubic-bezier(.2,.72,.18,1) both; }
-    @keyframes shadowNext {
-      0% { transform:rotateY(0deg) skewY(0); filter:brightness(1); box-shadow:0 0 0 rgba(52,47,39,0); }
-      30% { transform:rotateY(-11deg) skewY(-.1deg); filter:brightness(.99); box-shadow:15px 0 24px rgba(52,47,39,.1); }
-      68% { transform:rotateY(-58deg) skewY(-.34deg); filter:brightness(.84); box-shadow:28px 0 34px rgba(52,47,39,.22); }
-      100% { transform:rotateY(-89deg) skewY(-.08deg); filter:brightness(1.06); box-shadow:9px 0 17px rgba(52,47,39,.1); }
+    .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
+      animation:none !important;
+      transition:none !important;
+      caret-color:transparent !important;
     }
-    @keyframes shadowPrev {
-      0% { transform:rotateY(-89deg) skewY(-.08deg); filter:brightness(1.06); box-shadow:9px 0 17px rgba(52,47,39,.1); }
-      34% { transform:rotateY(-55deg) skewY(-.32deg); filter:brightness(.85); box-shadow:28px 0 34px rgba(52,47,39,.21); }
-      72% { transform:rotateY(-10deg) skewY(-.08deg); filter:brightness(.99); box-shadow:14px 0 22px rgba(52,47,39,.09); }
-      100% { transform:rotateY(0deg) skewY(0); filter:brightness(1); box-shadow:0 0 0 rgba(52,47,39,0); }
+    .page-turn-ghost {
+      position:absolute;
+      z-index:1;
+      inset:0;
+      transform:scaleX(-1);
+      transform-origin:center;
+      opacity:var(--transmission, .2);
+      filter:grayscale(1) contrast(.92) blur(.4px);
+      mix-blend-mode:multiply;
     }
-    @media (prefers-reduced-motion:reduce) { .page-turn-leaf.next, .page-turn-leaf.prev { animation-duration:.01ms; } }
   `;
 
   const stage = document.createElement('div');
@@ -921,42 +950,118 @@ function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
   back.className = 'page-turn-face page-turn-back';
 
   if (direction > 0) {
-    front.append(oldSnapshot);
-  } else {
     const base = document.createElement('div');
     base.className = 'page-turn-base';
-    base.append(oldSnapshot);
+    base.append(targetSnapshot);
     stage.append(base);
-    front.append(clonePageSnapshot(newPage));
+    front.append(oldSnapshot);
+  } else {
+    front.append(targetSnapshot);
   }
+  back.append(ghostSnapshot);
   leaf.append(front, back);
   stage.append(leaf);
   shadow.append(style, stage);
   document.body.append(host);
-  activePageTurn = host;
+  [oldSnapshot, targetSnapshot, ghostSnapshot].forEach(preparePageTurnSnapshot);
+
+  let progress = 0;
+  let animationFrame = 0;
+  let settled = false;
+  let settleCommit = null;
+
+  const setProgress = value => {
+    progress = Math.max(0, Math.min(1, value));
+    const phase = Math.sin(Math.PI * progress);
+    const leafProgress = direction > 0 ? progress : 1 - progress;
+    const angle = -178 * leafProgress;
+    const projectedWidth = oldRect.width * Math.cos(Math.abs(angle) * Math.PI / 180);
+    const foldEdge = oldRect.width * (direction > 0 ? 1 - progress : progress);
+    const offsetX = foldEdge - Math.max(0, projectedWidth);
+    const shadowWidth = Math.round(10 + phase * 24);
+    const shadowAlpha = (.07 + phase * .16).toFixed(3);
+    leaf.style.transform = `translateX(${offsetX}px) rotateY(${angle}deg) skewY(${-phase * .34}deg)`;
+    leaf.style.filter = `brightness(${(1 - phase * .16).toFixed(3)})`;
+    leaf.style.boxShadow = `${shadowWidth}px 0 ${shadowWidth + 8}px rgba(52,47,39,${shadowAlpha})`;
+    leaf.style.setProperty('--edge-opacity', String(.5 + phase * .42));
+    host.style.setProperty('--transmission', String(.12 + phase * .09));
+    host.dataset.pageTurnProgress = progress.toFixed(3);
+  };
 
   const cleanup = () => {
-    if (activePageTurn !== host) return;
+    cancelAnimationFrame(animationFrame);
     host.remove();
-    activePageTurn = null;
-    clearTimeout(activePageTurnTimer);
+    if (activePageTurn === controller) activePageTurn = null;
   };
-  leaf.addEventListener('animationend', cleanup, { once: true });
-  activePageTurnTimer = window.setTimeout(cleanup, 1100);
+
+  const finalize = commit => {
+    if (settled) return;
+    settled = true;
+    if (commit) {
+      selectedDate = new Date(targetDate);
+      pageMotion = '';
+      render();
+    }
+    cleanup();
+  };
+
+  const animateTo = (target, commit) => {
+    cancelAnimationFrame(animationFrame);
+    settleCommit = commit;
+    const start = progress;
+    const distance = Math.abs(target - start);
+    const duration = 160 + distance * 430;
+    const startedAt = performance.now();
+    const tick = now => {
+      const elapsed = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      setProgress(start + (target - start) * eased);
+      if (elapsed < 1) animationFrame = requestAnimationFrame(tick);
+      else finalize(commit);
+    };
+    animationFrame = requestAnimationFrame(tick);
+  };
+
+  const controller = {
+    direction,
+    targetDate: new Date(targetDate),
+    host,
+    setProgress,
+    get progress() { return progress; },
+    settle(commit) { animateTo(commit ? 1 : 0, commit); },
+    finishImmediately(commit = settleCommit ?? progress >= .46) {
+      cancelAnimationFrame(animationFrame);
+      setProgress(commit ? 1 : 0);
+      finalize(commit);
+    }
+  };
+  activePageTurn = controller;
+  setProgress(0);
+  return controller;
+}
+
+function beginGesturePageTurn(direction) {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null;
+  const targetDate = addDays(selectedDate, direction);
+  const oldPage = document.querySelector('.page');
+  if (!oldPage || !inRange(targetDate)) return null;
+  return createPageTurn(oldPage, targetDate, direction);
 }
 
 function switchDay(direction) {
+  activePageTurn?.finishImmediately(true);
   const next = addDays(selectedDate, direction);
   if (!inRange(next)) return;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   const oldPage = document.querySelector('.page');
-  const oldRect = oldPage?.getBoundingClientRect();
-  const oldSnapshot = oldPage && !reducedMotion ? clonePageSnapshot(oldPage) : null;
-  selectedDate = next;
-  pageMotion = '';
-  render();
-  const newPage = document.querySelector('.page');
-  if (oldSnapshot && oldRect && newPage) playPageTurn(oldSnapshot, newPage, oldRect, direction);
+  if (reducedMotion || !oldPage) {
+    selectedDate = next;
+    pageMotion = '';
+    render();
+    return;
+  }
+  const turn = createPageTurn(oldPage, next, direction);
+  requestAnimationFrame(() => turn?.settle(true));
 }
 
 app.addEventListener('click', event => {
@@ -1044,7 +1149,18 @@ app.addEventListener('touchstart', event => {
     gesture = { pinch: true, startDistance: Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY) };
     event.preventDefault();
   } else if (event.touches.length === 1 && !isInputTarget(event.target)) {
-    gesture = { pinch: false, x: event.touches[0].clientX, y: event.touches[0].clientY, axis: null };
+    activePageTurn?.finishImmediately(true);
+    const touch = event.touches[0];
+    gesture = {
+      pinch: false,
+      x: touch.clientX,
+      y: touch.clientY,
+      lastX: touch.clientX,
+      lastAt: performance.now(),
+      velocityX: 0,
+      axis: null,
+      turn: null
+    };
   }
 }, { passive: false });
 
@@ -1057,10 +1173,27 @@ app.addEventListener('touchmove', event => {
     const touch = event.touches[0];
     const deltaX = touch.clientX - gesture.x;
     const deltaY = touch.clientY - gesture.y;
+    const now = performance.now();
+    const elapsed = Math.max(1, now - gesture.lastAt);
+    const instantVelocity = (touch.clientX - gesture.lastX) / elapsed;
+    gesture.velocityX = gesture.velocityX * .58 + instantVelocity * .42;
+    gesture.lastX = touch.clientX;
+    gesture.lastAt = now;
     if (!gesture.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= SWIPE_AXIS_THRESHOLD) {
       gesture.axis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical';
     }
-    if (gesture.axis === 'horizontal') event.preventDefault();
+    if (gesture.axis === 'horizontal') {
+      event.preventDefault();
+      if (currentView !== 'day') return;
+      if (!gesture.turn && Math.abs(deltaX) > 12) {
+        gesture.turn = beginGesturePageTurn(deltaX < 0 ? 1 : -1);
+      }
+      if (gesture.turn) {
+        const travel = gesture.turn.direction > 0 ? -deltaX : deltaX;
+        const turnDistance = Math.min(innerWidth, 780) * .86;
+        gesture.turn.setProgress(travel / turnDistance);
+      }
+    }
   }
 }, { passive: false });
 
@@ -1070,6 +1203,10 @@ app.addEventListener('touchend', event => {
     const ratio = (gesture.lastDistance || gesture.startDistance) / gesture.startDistance;
     if (ratio < .78) changeView(currentView === 'day' ? 'week' : currentView === 'week' ? 'month' : 'month');
     else if (ratio > 1.22) changeView(currentView === 'month' ? 'week' : currentView === 'week' ? 'day' : 'day');
+  } else if (!gesture.pinch && gesture.turn) {
+    const directionalVelocity = gesture.turn.direction > 0 ? -gesture.velocityX : gesture.velocityX;
+    const commit = gesture.turn.progress >= .46 || (gesture.turn.progress >= .08 && directionalVelocity > .42);
+    gesture.turn.settle(commit);
   } else if (!gesture.pinch && currentView === 'day') {
     const touch = event.changedTouches[0];
     const deltaX = touch.clientX - gesture.x;
@@ -1079,7 +1216,10 @@ app.addEventListener('touchend', event => {
   gesture = null;
 }, { passive: true });
 
-app.addEventListener('touchcancel', () => { gesture = null; });
+app.addEventListener('touchcancel', () => {
+  gesture?.turn?.settle(false);
+  gesture = null;
+});
 
 window.addEventListener('keydown', event => {
   if (currentView !== 'day' || menuOpen || isInputTarget(event.target)) return;
