@@ -179,6 +179,53 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(runningFiniteAnimations).toEqual([]);
 });
 
+test('mirrors and mutes the paper backside without native fields', async ({ page }) => {
+  await page.addInitScript(() => {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachOpenShadow(init) {
+      return attachShadow.call(this, { ...init, mode: 'open' });
+    };
+  });
+  await page.reload();
+
+  const editable = page.locator('#app [data-extra-index="3"]');
+  await editable.fill('输入内容不会在翻页时闪烁');
+  await editable.focus();
+  await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = x => new Touch({ identifier: 31, target, clientX: x, clientY: 430 });
+    const start = touch(350);
+    const move = touch(165);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+  });
+
+  const paper = await page.evaluate(() => {
+    const host = document.querySelector('.page-turn-host');
+    const root = host.shadowRoot;
+    const backside = root.querySelector('.page-turn-backside');
+    const snapshot = backside.querySelector('.page-turn-snapshot');
+    const content = snapshot.querySelector('.task-list');
+    return {
+      activeElement: document.activeElement?.tagName,
+      nativeFields: root.querySelectorAll('input, textarea, select').length,
+      frozenFields: root.querySelectorAll('.page-turn-static-field').length,
+      frozenText: [...root.querySelectorAll('.page-turn-static-field')].map(field => field.textContent).join(' '),
+      transform: getComputedStyle(snapshot).transform,
+      opacity: Number(getComputedStyle(content).opacity),
+      filter: getComputedStyle(content).filter
+    };
+  });
+
+  expect(paper.activeElement).toBe('BODY');
+  expect(paper.nativeFields).toBe(0);
+  expect(paper.frozenFields).toBeGreaterThan(0);
+  expect(paper.frozenText).toContain('输入内容不会在翻页时闪烁');
+  expect(paper.transform).toBe('matrix(-1, 0, 0, 1, 0, 0)');
+  expect(paper.opacity).toBeLessThan(0.3);
+  expect(paper.filter).not.toBe('none');
+});
+
 test('keeps next-day INP below 150ms with 4x CPU throttling', async ({ page, context }) => {
   const client = await context.newCDPSession(page);
   await client.send('Emulation.setCPUThrottlingRate', { rate: 4 });

@@ -113,6 +113,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.page-turn-static-field { pointer-events: none; user-select: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+.page-turn-static-field.is-placeholder { color: var(--muted); }
 .line-input-shell:focus-within { --input-rule: var(--ink); }
 .status-button { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; justify-self: end; align-self: center; transition: transform .28s var(--ease-spring), color .28s, background .28s, border-color .28s, box-shadow .28s; }
 .status-button svg { width: 15px; height: 15px; }
@@ -129,7 +131,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .task.exempt .status-button { color: white; background: linear-gradient(135deg, #75ae9a, #a58ac2); border: 0; }
 .journal { max-width: 620px; margin: 34px auto 0; padding: 18px 0 0; border-top: 1px solid var(--ink); position: relative; animation: revealUp .5s .16s var(--ease-out) both; }
 .journal label { font-family: 'Noto Serif SC', serif; font-size: 13px; letter-spacing: .16em; }
-.journal textarea { display: block; width: 100%; min-height: 150px; margin-top: 14px; padding: 0; resize: vertical; border: 0; outline: 0; background: repeating-linear-gradient(transparent, transparent 30px, var(--line) 31px); font-family: 'Noto Serif SC', serif; font-size: 13px; line-height: 31px; }
+.journal textarea, .journal .page-turn-static-field { display: block; width: 100%; min-height: 150px; margin-top: 14px; padding: 0; resize: vertical; border: 0; outline: 0; background: repeating-linear-gradient(transparent, transparent 30px, var(--line) 31px); font-family: 'Noto Serif SC', serif; font-size: 13px; line-height: 31px; }
 .journal > span { position: absolute; top: 20px; right: 0; color: var(--muted); font-size: 9px; letter-spacing: .14em; }
 .week-stat-jump { width: min(100%, 620px); height: 50px; margin: 30px auto 0; padding: 0 17px; border: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; font-size: 12px; letter-spacing: .14em; transition: transform .25s var(--ease-out), background .25s, border-color .25s; animation: revealUp .5s .2s var(--ease-out) both; }
 .week-stat-jump:hover { background: #fff; }
@@ -140,7 +142,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .saturday-list { border-top-color: rgba(34,38,34,.28); }
 .saturday-task { min-height: 87px; grid-template-columns: 42px 1fr 54px; border-bottom-width: 1.5px; }
 .saturday-task .task-number { font-size: 18px; }
-.saturday-task textarea { width: 100%; min-height: 44px; padding: 10px 8px; resize: none; overflow: hidden; border: 0; outline: 0; background: transparent; font-family: 'Noto Serif SC', serif; font-size: 21px; line-height: 1.5; }
+.saturday-task textarea, .saturday-task .page-turn-static-field { width: 100%; min-height: 44px; padding: 10px 8px; resize: none; overflow: hidden; border: 0; outline: 0; background: transparent; font-family: 'Noto Serif SC', serif; font-size: 21px; line-height: 1.5; }
 .status-button.large { width: 44px; height: 44px; border-width: 1.5px; }
 .status-button.large svg { width: 21px; height: 21px; }
 .saturday-task::after { left: 38px; right: 64px; height: 1.5px; }

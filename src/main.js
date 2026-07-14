@@ -926,6 +926,37 @@ function preparePageTurnSnapshot(snapshot) {
     element.style.height = 'auto';
     element.style.height = `${element.scrollHeight}px`;
   });
+  snapshot.querySelectorAll('input, textarea, select').forEach(field => {
+    const rect = field.getBoundingClientRect();
+    const frozen = document.createElement('div');
+    const selectedText = field.tagName === 'SELECT'
+      ? [...field.selectedOptions].map(option => option.textContent).join('、')
+      : field.type === 'checkbox' || field.type === 'radio'
+        ? (field.checked ? '✓' : '')
+        : field.value;
+    const text = selectedText || field.placeholder || '';
+    frozen.className = `${field.className} page-turn-static-field${!selectedText && field.placeholder ? ' is-placeholder' : ''}`.trim();
+    if (field.id) frozen.id = field.id;
+    if (field.getAttribute('style')) frozen.setAttribute('style', field.getAttribute('style'));
+    frozen.style.width = `${rect.width}px`;
+    frozen.style.height = `${rect.height}px`;
+    frozen.textContent = text;
+    frozen.setAttribute('aria-hidden', 'true');
+    field.replaceWith(frozen);
+  });
+}
+
+function clearPageTurnBackside(engine) {
+  engine.book.querySelectorAll('.page-turn-backside').forEach(page => page.classList.remove('page-turn-backside'));
+}
+
+function showPageTurnBackside(engine, direction, targetIndex) {
+  clearPageTurnBackside(engine);
+  const sheetDate = direction > 0 ? engine.dateKeys[engine.currentIndex] : engine.dateKeys[targetIndex];
+  const matchingPages = [...engine.book.querySelectorAll('.page-turn-page')]
+    .filter(page => page.dataset.pageTurnDate === sheetDate);
+  const backside = direction > 0 ? matchingPages.at(-1) : matchingPages[0];
+  backside?.classList.add('page-turn-backside');
 }
 
 function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages, snapshots) {
@@ -956,6 +987,11 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     .stf__item { display:none; position:absolute; transform-style:preserve-3d; }
     .stf__outerShadow, .stf__innerShadow, .stf__hardShadow, .stf__hardInnerShadow { position:absolute; left:0; top:0; pointer-events:none; }
     .page-turn-page { overflow:hidden; background:var(--paper); }
+    .page-turn-page.page-turn-backside {
+      background:
+        linear-gradient(90deg, rgba(70,68,61,.035), transparent 14%, transparent 86%, rgba(70,68,61,.025)),
+        var(--paper);
+    }
     .page-turn-snapshot.page {
       position:absolute;
       top:var(--turn-content-top);
@@ -966,6 +1002,16 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
       border-color:rgba(34,38,34,.1);
       box-shadow:none;
       background:var(--paper);
+    }
+    .page-turn-backside .page-turn-snapshot.page {
+      transform:scaleX(-1);
+      transform-origin:50% 50%;
+      background:transparent;
+    }
+    .page-turn-backside .page-turn-snapshot.page::before { opacity:.17; }
+    .page-turn-backside .page-turn-snapshot.page > * {
+      opacity:.24;
+      filter:grayscale(.82) sepia(.08) saturate(.28) contrast(.7);
     }
     .page-turn-snapshot.page::before { position:absolute; }
     .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
@@ -1033,10 +1079,11 @@ function buildPageTurnPages(date, oldPage, contentOffsetY) {
     ? clonePageSnapshot(oldPage, dateKey(item))
     : pageSnapshotForDate(item));
   snapshots.forEach(snapshot => snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`));
-  const pages = snapshots.map(snapshot => {
+  const pages = snapshots.map((snapshot, index) => {
     const page = document.createElement('div');
     page.className = 'page-turn-page';
     page.dataset.density = 'soft';
+    page.dataset.pageTurnDate = dateKey(dates[index]);
     page.append(snapshot);
     return page;
   });
@@ -1129,6 +1176,9 @@ function getPreparedPageTurnEngine() {
 function createPageTurnController(engine, targetDate, direction, touchY = null) {
   const targetIndex = engine.currentIndex + direction;
   if (targetIndex < 0 || targetIndex >= engine.dateKeys.length) return null;
+  const activeField = document.activeElement;
+  if (activeField?.matches?.('input, textarea, select, [contenteditable="true"]')) activeField.blur();
+  clearPageTurnBackside(engine);
   let progress = 0;
   let settled = false;
   let liveCommitted = false;
@@ -1155,6 +1205,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     settled = true;
     clearTimeout(fallbackTimer);
     cancelAnimationFrame(programmaticFrame);
+    clearPageTurnBackside(engine);
     engine.host.style.visibility = 'hidden';
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
@@ -1166,6 +1217,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (!userTouchStarted) {
       engine.pageFlip.startUserTouch(startPoint);
       engine.pageFlip.userMove({ x: direction > 0 ? engine.width - 10 : 10, y: startY }, true);
+      showPageTurnBackside(engine, direction, targetIndex);
       userTouchStarted = true;
     }
     lastPoint = {
