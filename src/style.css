@@ -319,15 +319,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 .toast { position: fixed; z-index: 100; left: 50%; bottom: max(30px, env(safe-area-inset-bottom)); padding: 10px 17px; color: white; background: rgba(34,38,34,.88); border-radius: 20px; font-size: 10px; letter-spacing: .1em; opacity: 0; transform: translate(-50%, 15px); pointer-events: none; transition: .3s; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.turn-next, .turn-prev { transform: none; }
-.turn-next > * { animation: pageNext .46s var(--ease-out) both; }
-.turn-prev > * { animation: pagePrev .46s var(--ease-out) both; }
-.turn-next > :nth-child(2), .turn-prev > :nth-child(2) { animation-delay: 24ms; }
-.turn-next > :nth-child(3), .turn-prev > :nth-child(3) { animation-delay: 48ms; }
-.turn-next > :nth-child(n+4), .turn-prev > :nth-child(n+4) { animation-delay: 72ms; }
-
-@keyframes pageNext { from { opacity: .18; transform: translateX(20px); } to { opacity: 1; transform: none; } }
-@keyframes pagePrev { from { opacity: .18; transform: translateX(-20px); } to { opacity: 1; transform: none; } }
 @keyframes revealUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes taskEnter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
 @keyframes statCellIn { from { opacity: 0; transform: translateY(9px) scale(.98); } to { opacity: 1; transform: none; } }

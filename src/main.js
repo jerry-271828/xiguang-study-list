@@ -271,9 +271,9 @@ function saturdayItems(date) {
 
 function dateHeading(date, subtitle) {
   return `<div class="date-heading">
-    <button class="day-arrow prev" data-action="prev-day" ${date <= START ? 'disabled' : ''}>${icons.arrow}</button>
+    <button class="day-arrow prev" data-action="prev-day" aria-label="上一天" ${date <= START ? 'disabled' : ''}>${icons.arrow}</button>
     <div><strong>${formatDate(date)}</strong><span>星期${WEEKDAYS[date.getDay()]} · ${subtitle}</span></div>
-    <button class="day-arrow" data-action="next-day" ${date >= END ? 'disabled' : ''}>${icons.arrow}</button>
+    <button class="day-arrow" data-action="next-day" aria-label="下一天" ${date >= END ? 'disabled' : ''}>${icons.arrow}</button>
   </div>`;
 }
 
@@ -796,12 +796,167 @@ function autoGrowTextareas() {
   });
 }
 
+let activePageTurn = null;
+let activePageTurnTimer = 0;
+let pageTurnStyles = '';
+
+function serializedPageStyles() {
+  if (pageTurnStyles) return pageTurnStyles;
+  pageTurnStyles = Array.from(document.styleSheets).map(sheet => {
+    try { return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n'); }
+    catch { return ''; }
+  }).join('\n');
+  return pageTurnStyles;
+}
+
+function clonePageSnapshot(source) {
+  const snapshot = source.cloneNode(true);
+  snapshot.classList.add('page-turn-snapshot');
+  const sourceFields = source.querySelectorAll('input, textarea, select');
+  const snapshotFields = snapshot.querySelectorAll('input, textarea, select');
+  sourceFields.forEach((field, index) => {
+    const copy = snapshotFields[index];
+    if (!copy) return;
+    copy.value = field.value;
+    if ('checked' in field) copy.checked = field.checked;
+  });
+  return snapshot;
+}
+
+function playPageTurn(oldSnapshot, newPage, oldRect, direction) {
+  activePageTurn?.remove();
+  clearTimeout(activePageTurnTimer);
+
+  const newRect = newPage.getBoundingClientRect();
+  const host = document.createElement('div');
+  host.className = 'page-turn-host';
+  host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+  host.setAttribute('aria-hidden', 'true');
+  host.inert = true;
+  Object.assign(host.style, {
+    position: 'fixed',
+    zIndex: '30',
+    left: `${oldRect.left}px`,
+    top: `${Math.min(oldRect.top, newRect.top)}px`,
+    width: `${oldRect.width}px`,
+    height: `${Math.max(oldRect.height, newRect.height)}px`,
+    pointerEvents: 'none',
+    overflow: 'visible'
+  });
+
+  const shadow = host.attachShadow({ mode: 'closed' });
+  const style = document.createElement('style');
+  style.textContent = `${serializedPageStyles()}
+    :host { display:block; color:var(--ink); font-family:'Urbanist','PingFang SC',sans-serif; }
+    .page-turn-stage { position:absolute; inset:0; perspective:1800px; transform-style:preserve-3d; }
+    .page-turn-base, .page-turn-leaf, .page-turn-face { position:absolute; inset:0; }
+    .page-turn-base, .page-turn-face { overflow:hidden; background:var(--paper); }
+    .page-turn-base { z-index:0; }
+    .page-turn-leaf {
+      z-index:2;
+      transform-origin:left center;
+      transform-style:preserve-3d;
+      will-change:transform, filter;
+    }
+    .page-turn-face { backface-visibility:hidden; transform-style:preserve-3d; }
+    .page-turn-front { z-index:2; }
+    .page-turn-back {
+      transform:rotateY(180deg);
+      background:
+        linear-gradient(90deg, rgba(52,47,39,.18), rgba(52,47,39,.035) 12%, rgba(255,255,255,.22) 72%, rgba(52,47,39,.05)),
+        var(--paper);
+    }
+    .page-turn-back::before {
+      content:'';
+      position:absolute;
+      inset:0;
+      opacity:.22;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
+    }
+    .page-turn-leaf::after {
+      content:'';
+      position:absolute;
+      z-index:4;
+      top:0;
+      right:-1px;
+      bottom:0;
+      width:9px;
+      background:linear-gradient(90deg, rgba(52,47,39,.11), rgba(255,255,255,.68) 48%, rgba(52,47,39,.08));
+      transform:translateZ(1px);
+      opacity:.72;
+    }
+    .page-turn-snapshot.page {
+      width:100%;
+      min-height:100%;
+      margin:0;
+      view-transition-name:none;
+      border-color:rgba(34,38,34,.1);
+      box-shadow:none;
+    }
+    .page-turn-snapshot.page::before { position:absolute; }
+    .page-turn-leaf.next { animation:shadowNext .78s cubic-bezier(.2,.72,.18,1) both; }
+    .page-turn-leaf.prev { transform:rotateY(-89deg); animation:shadowPrev .78s cubic-bezier(.2,.72,.18,1) both; }
+    @keyframes shadowNext {
+      0% { transform:rotateY(0deg) skewY(0); filter:brightness(1); box-shadow:0 0 0 rgba(52,47,39,0); }
+      30% { transform:rotateY(-11deg) skewY(-.1deg); filter:brightness(.99); box-shadow:15px 0 24px rgba(52,47,39,.1); }
+      68% { transform:rotateY(-58deg) skewY(-.34deg); filter:brightness(.84); box-shadow:28px 0 34px rgba(52,47,39,.22); }
+      100% { transform:rotateY(-89deg) skewY(-.08deg); filter:brightness(1.06); box-shadow:9px 0 17px rgba(52,47,39,.1); }
+    }
+    @keyframes shadowPrev {
+      0% { transform:rotateY(-89deg) skewY(-.08deg); filter:brightness(1.06); box-shadow:9px 0 17px rgba(52,47,39,.1); }
+      34% { transform:rotateY(-55deg) skewY(-.32deg); filter:brightness(.85); box-shadow:28px 0 34px rgba(52,47,39,.21); }
+      72% { transform:rotateY(-10deg) skewY(-.08deg); filter:brightness(.99); box-shadow:14px 0 22px rgba(52,47,39,.09); }
+      100% { transform:rotateY(0deg) skewY(0); filter:brightness(1); box-shadow:0 0 0 rgba(52,47,39,0); }
+    }
+    @media (prefers-reduced-motion:reduce) { .page-turn-leaf.next, .page-turn-leaf.prev { animation-duration:.01ms; } }
+  `;
+
+  const stage = document.createElement('div');
+  stage.className = 'page-turn-stage';
+  const leaf = document.createElement('div');
+  leaf.className = `page-turn-leaf ${direction > 0 ? 'next' : 'prev'}`;
+  const front = document.createElement('div');
+  front.className = 'page-turn-face page-turn-front';
+  const back = document.createElement('div');
+  back.className = 'page-turn-face page-turn-back';
+
+  if (direction > 0) {
+    front.append(oldSnapshot);
+  } else {
+    const base = document.createElement('div');
+    base.className = 'page-turn-base';
+    base.append(oldSnapshot);
+    stage.append(base);
+    front.append(clonePageSnapshot(newPage));
+  }
+  leaf.append(front, back);
+  stage.append(leaf);
+  shadow.append(style, stage);
+  document.body.append(host);
+  activePageTurn = host;
+
+  const cleanup = () => {
+    if (activePageTurn !== host) return;
+    host.remove();
+    activePageTurn = null;
+    clearTimeout(activePageTurnTimer);
+  };
+  leaf.addEventListener('animationend', cleanup, { once: true });
+  activePageTurnTimer = window.setTimeout(cleanup, 1100);
+}
+
 function switchDay(direction) {
   const next = addDays(selectedDate, direction);
   if (!inRange(next)) return;
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const oldPage = document.querySelector('.page');
+  const oldRect = oldPage?.getBoundingClientRect();
+  const oldSnapshot = oldPage && !reducedMotion ? clonePageSnapshot(oldPage) : null;
   selectedDate = next;
-  pageMotion = direction > 0 ? 'turn-next' : 'turn-prev';
+  pageMotion = '';
   render();
+  const newPage = document.querySelector('.page');
+  if (oldSnapshot && oldRect && newPage) playPageTurn(oldSnapshot, newPage, oldRect, direction);
 }
 
 app.addEventListener('click', event => {
@@ -925,6 +1080,13 @@ app.addEventListener('touchend', event => {
 }, { passive: true });
 
 app.addEventListener('touchcancel', () => { gesture = null; });
+
+window.addEventListener('keydown', event => {
+  if (currentView !== 'day' || menuOpen || isInputTarget(event.target)) return;
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  switchDay(event.key === 'ArrowRight' ? 1 : -1);
+});
 
 window.addEventListener('beforeunload', () => localStorage.setItem(STORE_KEY, JSON.stringify(data)));
 window.addEventListener('resize', () => requestAnimationFrame(autoGrowTextareas));

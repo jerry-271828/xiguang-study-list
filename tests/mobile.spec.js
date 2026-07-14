@@ -146,6 +146,28 @@ test('keeps the page canvas anchored during rapid mobile paging', async ({ page 
   }
 });
 
+test('turns an isolated paper layer while the live page stays fixed', async ({ page }) => {
+  await page.locator('[data-action="next-day"]').click();
+
+  const turnLayer = page.locator('[data-page-turn="next"]');
+  await expect(turnLayer).toBeAttached();
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 14');
+
+  const geometry = await page.locator('.page').evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      viewport: innerWidth,
+      transform: getComputedStyle(element).transform
+    };
+  });
+  expect(Math.abs(geometry.left)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(geometry.right - geometry.viewport)).toBeLessThanOrEqual(0.5);
+  expect(geometry.transform).toBe('none');
+  expect(await turnLayer.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none');
+});
+
 test('supports repeated touch swipes without moving the page canvas', async ({ page }) => {
   for (let turn = 0; turn < 4; turn += 1) {
     await page.evaluate(() => {
