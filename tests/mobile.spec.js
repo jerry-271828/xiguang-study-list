@@ -206,11 +206,16 @@ test('mirrors and mutes the paper backside without native fields', async ({ page
     const backside = root.querySelector('.page-turn-backside');
     const snapshot = backside.querySelector('.page-turn-snapshot');
     const content = snapshot.querySelector('.task-list');
+    const maskedJournal = root.querySelector('.page-turn-mask .journal .page-turn-static-field');
     return {
       activeElement: document.activeElement?.tagName,
       nativeFields: root.querySelectorAll('input, textarea, select').length,
       frozenFields: root.querySelectorAll('.page-turn-static-field').length,
       frozenText: [...root.querySelectorAll('.page-turn-static-field')].map(field => field.textContent).join(' '),
+      maskedDate: root.querySelector('.page-turn-mask').dataset.pageTurnDate,
+      journalWidth: maskedJournal.getBoundingClientRect().width,
+      journalHeight: maskedJournal.getBoundingClientRect().height,
+      journalText: maskedJournal.textContent,
       transform: getComputedStyle(snapshot).transform,
       opacity: Number(getComputedStyle(content).opacity),
       filter: getComputedStyle(content).filter
@@ -221,9 +226,69 @@ test('mirrors and mutes the paper backside without native fields', async ({ page
   expect(paper.nativeFields).toBe(0);
   expect(paper.frozenFields).toBeGreaterThan(0);
   expect(paper.frozenText).toContain('输入内容不会在翻页时闪烁');
+  expect(paper.maskedDate).toBe('2026-07-13');
+  expect(paper.journalWidth).toBeGreaterThan(300);
+  expect(paper.journalHeight).toBeGreaterThanOrEqual(150);
+  expect(paper.journalText).toBe('今日留下的光……');
   expect(paper.transform).toBe('matrix(-1, 0, 0, 1, 0, 0)');
   expect(paper.opacity).toBeLessThan(0.3);
   expect(paper.filter).not.toBe('none');
+});
+
+test('keeps the target-page mask painted through the live DOM handoff', async ({ page }) => {
+  await page.addInitScript(() => {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachOpenShadow(init) {
+      return attachShadow.call(this, { ...init, mode: 'open' });
+    };
+  });
+  await page.reload();
+  await page.evaluate(() => {
+    window.__pageTurnHandoff = [];
+    const app = document.querySelector('#app');
+    const sample = phase => {
+      const host = document.querySelector('.page-turn-host');
+      const mask = host?.shadowRoot?.querySelector('.page-turn-mask');
+      const maskedJournal = mask?.querySelector('.journal .page-turn-static-field')?.getBoundingClientRect();
+      const liveJournal = document.querySelector('#app .journal textarea')?.getBoundingClientRect();
+      window.__pageTurnHandoff.push({
+        phase,
+        visibility: host ? getComputedStyle(host).visibility : null,
+        maskDate: mask?.dataset.pageTurnDate,
+        liveDate: document.querySelector('.date-heading strong')?.textContent,
+        journalWidthDelta: Math.abs((maskedJournal?.width || 0) - (liveJournal?.width || 0)),
+        journalHeightDelta: Math.abs((maskedJournal?.height || 0) - (liveJournal?.height || 0))
+      });
+    };
+    const observer = new MutationObserver(() => {
+      if (window.__pageTurnHandoff.length || document.querySelector('.date-heading strong')?.textContent !== '07 / 14') return;
+      sample('commit');
+      requestAnimationFrame(() => {
+        sample('paint-1');
+        requestAnimationFrame(() => sample('paint-2'));
+      });
+    });
+    observer.observe(app, { childList: true, subtree: true });
+
+    const touch = x => new Touch({ identifier: 32, target: app, clientX: x, clientY: 430 });
+    const start = touch(350);
+    const move = touch(165);
+    const end = touch(30);
+    app.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    app.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+    app.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    app.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  });
+
+  await expect(page.locator('#app .date-heading strong')).toHaveText('07 / 14');
+  await page.waitForFunction(() => window.__pageTurnHandoff.length === 3);
+  const handoff = await page.evaluate(() => window.__pageTurnHandoff);
+  expect(handoff.map(frame => frame.visibility)).toEqual(['visible', 'visible', 'visible']);
+  expect(handoff.map(frame => frame.maskDate)).toEqual(['2026-07-14', '2026-07-14', '2026-07-14']);
+  expect(handoff.map(frame => frame.liveDate)).toEqual(['07 / 14', '07 / 14', '07 / 14']);
+  expect(handoff.every(frame => frame.journalWidthDelta <= 0.5)).toBe(true);
+  expect(handoff.every(frame => frame.journalHeightDelta <= 0.5)).toBe(true);
+  await expect(page.locator('.page-turn-host')).toBeHidden();
 });
 
 test('keeps next-day INP below 150ms with 4x CPU throttling', async ({ page, context }) => {

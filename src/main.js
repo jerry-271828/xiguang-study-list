@@ -920,30 +920,68 @@ function pageSnapshotForDate(date) {
   return snapshot ? namespaceSnapshotIds(snapshot, dateKey(date)) : null;
 }
 
-function preparePageTurnSnapshot(snapshot) {
-  snapshot.querySelectorAll('.line-input').forEach(autoGrowLineInput);
-  snapshot.querySelectorAll('.saturday-task textarea').forEach(element => {
-    element.style.height = 'auto';
-    element.style.height = `${element.scrollHeight}px`;
+function preparePageTurnSnapshot(snapshot, pageWidth) {
+  const measureHost = document.createElement('div');
+  Object.assign(measureHost.style, {
+    position: 'fixed',
+    zIndex: '-1',
+    left: '-100000px',
+    top: '0',
+    width: `${pageWidth}px`,
+    minHeight: '100vh',
+    visibility: 'hidden',
+    pointerEvents: 'none'
   });
-  snapshot.querySelectorAll('input, textarea, select').forEach(field => {
-    const rect = field.getBoundingClientRect();
-    const frozen = document.createElement('div');
-    const selectedText = field.tagName === 'SELECT'
-      ? [...field.selectedOptions].map(option => option.textContent).join('、')
-      : field.type === 'checkbox' || field.type === 'radio'
-        ? (field.checked ? '✓' : '')
-        : field.value;
-    const text = selectedText || field.placeholder || '';
-    frozen.className = `${field.className} page-turn-static-field${!selectedText && field.placeholder ? ' is-placeholder' : ''}`.trim();
-    if (field.id) frozen.id = field.id;
-    if (field.getAttribute('style')) frozen.setAttribute('style', field.getAttribute('style'));
-    frozen.style.width = `${rect.width}px`;
-    frozen.style.height = `${rect.height}px`;
-    frozen.textContent = text;
-    frozen.setAttribute('aria-hidden', 'true');
-    field.replaceWith(frozen);
-  });
+  document.body.append(measureHost);
+  measureHost.append(snapshot);
+  try {
+    snapshot.querySelectorAll('.line-input').forEach(autoGrowLineInput);
+    snapshot.querySelectorAll('.saturday-task textarea').forEach(element => {
+      element.style.height = 'auto';
+      element.style.height = `${element.scrollHeight}px`;
+    });
+    snapshot.querySelectorAll('input, textarea, select').forEach(field => {
+      const rect = field.getBoundingClientRect();
+      const frozen = document.createElement('div');
+      const selectedText = field.tagName === 'SELECT'
+        ? [...field.selectedOptions].map(option => option.textContent).join('、')
+        : field.type === 'checkbox' || field.type === 'radio'
+          ? (field.checked ? '✓' : '')
+          : field.value;
+      const text = selectedText || field.placeholder || '';
+      frozen.className = `${field.className} page-turn-static-field${!selectedText && field.placeholder ? ' is-placeholder' : ''}`.trim();
+      if (field.id) frozen.id = field.id;
+      if (field.getAttribute('style')) frozen.setAttribute('style', field.getAttribute('style'));
+      if (rect.width > 0) frozen.style.width = `${rect.width}px`;
+      if (rect.height > 0) frozen.style.height = `${rect.height}px`;
+      frozen.textContent = text;
+      frozen.setAttribute('aria-hidden', 'true');
+      field.replaceWith(frozen);
+    });
+  } finally {
+    snapshot.remove();
+    measureHost.remove();
+  }
+}
+
+function syncPageTurnMask(mask, book, pageDate) {
+  const sourcePage = [...book.querySelectorAll('.page-turn-page')]
+    .find(page => page.dataset.pageTurnDate === pageDate);
+  const sourceSnapshot = sourcePage?.querySelector('.page-turn-snapshot');
+  if (!sourceSnapshot) return false;
+  const maskSnapshot = sourceSnapshot.cloneNode(true);
+  maskSnapshot.classList.add('page-turn-mask-snapshot');
+  maskSnapshot.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
+  maskSnapshot.querySelectorAll('[for], [aria-controls], [aria-labelledby], [aria-describedby]')
+    .forEach(element => {
+      element.removeAttribute('for');
+      element.removeAttribute('aria-controls');
+      element.removeAttribute('aria-labelledby');
+      element.removeAttribute('aria-describedby');
+    });
+  mask.replaceChildren(maskSnapshot);
+  mask.dataset.pageTurnDate = pageDate;
+  return true;
 }
 
 function clearPageTurnBackside(engine) {
@@ -959,7 +997,7 @@ function showPageTurnBackside(engine, direction, targetIndex) {
   backside?.classList.add('page-turn-backside');
 }
 
-function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages, snapshots) {
+function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages) {
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurnModel = 'st-page-flip';
@@ -980,7 +1018,9 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
   const shadow = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
   style.textContent = `${serializedPageStyles()}
-    :host { display:block; color:var(--ink); font-family:'Urbanist','PingFang SC',sans-serif; }
+    :host { display:block; color:var(--ink); background:var(--paper); font-family:'Urbanist','PingFang SC',sans-serif; }
+    .page-turn-mask { position:absolute; z-index:0; inset:0; overflow:hidden; background:var(--paper); contain:paint; pointer-events:none; }
+    .page-turn-book { z-index:1; }
     .stf__parent { position:absolute !important; inset:0; display:block; box-sizing:border-box; transform:translateZ(0); touch-action:pan-y; }
     .stf__wrapper { position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; overflow:hidden; }
     .stf__block { position:absolute; width:100%; height:100%; box-sizing:border-box; perspective:2000px; }
@@ -1020,9 +1060,11 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
       caret-color:transparent !important;
     }
   `;
+  const mask = document.createElement('div');
+  mask.className = 'page-turn-mask';
   const book = document.createElement('div');
   book.className = 'page-turn-book';
-  shadow.append(style, book);
+  shadow.append(style, mask, book);
   document.body.append(host);
 
   const pageFlip = new PageFlip(book, {
@@ -1050,10 +1092,11 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     pageTurnEngine?.controller?.onState(state);
   });
   pageFlip.loadFromHTML(pages);
-  snapshots.forEach(preparePageTurnSnapshot);
   pageFlip.update();
+  syncPageTurnMask(mask, book, pages[startPage].dataset.pageTurnDate);
   return {
     host,
+    mask,
     book,
     pageFlip,
     width: oldRect.width,
@@ -1078,7 +1121,11 @@ function buildPageTurnPages(date, oldPage, contentOffsetY) {
   const snapshots = dates.map(item => dateKey(item) === dateKey(date)
     ? clonePageSnapshot(oldPage, dateKey(item))
     : pageSnapshotForDate(item));
-  snapshots.forEach(snapshot => snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`));
+  const pageWidth = oldPage.getBoundingClientRect().width;
+  snapshots.forEach(snapshot => {
+    snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`);
+    preparePageTurnSnapshot(snapshot, pageWidth);
+  });
   const pages = snapshots.map((snapshot, index) => {
     const page = document.createElement('div');
     page.className = 'page-turn-page';
@@ -1087,7 +1134,7 @@ function buildPageTurnPages(date, oldPage, contentOffsetY) {
     page.append(snapshot);
     return page;
   });
-  return { dates, dateKeys: dates.map(dateKey), currentIndex, snapshots, pages };
+  return { dates, dateKeys: dates.map(dateKey), currentIndex, pages };
 }
 
 function preparePageTurnEngine(date = selectedDate) {
@@ -1106,8 +1153,7 @@ function preparePageTurnEngine(date = selectedDate) {
       viewportTop,
       turnHeight,
       built.currentIndex,
-      built.pages,
-      built.snapshots
+      built.pages
     );
   } else {
     const sameSize = Math.abs(pageTurnEngine.width - oldRect.width) <= 1 &&
@@ -1129,10 +1175,15 @@ function preparePageTurnEngine(date = selectedDate) {
     pageTurnEngine.host.style.top = `${viewportTop}px`;
     pageTurnEngine.pageFlip.getRender().finishAnimation();
     pageTurnEngine.pageFlip.updateFromHtml(built.pages);
-    built.snapshots.forEach(preparePageTurnSnapshot);
     pageTurnEngine.pageFlip.turnToPage(built.currentIndex);
     pageTurnEngine.pageFlip.update();
   }
+
+  syncPageTurnMask(
+    pageTurnEngine.mask,
+    pageTurnEngine.book,
+    built.dateKeys[built.currentIndex]
+  );
 
   pageTurnEngine.host.style.visibility = 'hidden';
   pageTurnEngine.currentIndex = built.currentIndex;
@@ -1186,6 +1237,8 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   let lastPoint = null;
   let fallbackTimer = 0;
   let programmaticFrame = 0;
+  let cleanupFrame = 0;
+  let cleanupQueued = false;
   let observedActiveState = false;
   const viewportTop = Number.parseFloat(engine.host.style.top) || 0;
   const startY = Math.max(2, Math.min(engine.height - 2, (touchY ?? viewportTop + engine.height * .35) - viewportTop));
@@ -1193,6 +1246,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
 
   const commitLivePage = () => {
     if (liveCommitted) return;
+    syncPageTurnMask(engine.mask, engine.book, dateKey(targetDate));
     selectedDate = new Date(targetDate);
     pageMotion = '';
     render();
@@ -1200,16 +1254,32 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     liveCommitted = true;
   };
 
-  const cleanup = () => {
+  const finishCleanup = () => {
     if (settled) return;
     settled = true;
-    clearTimeout(fallbackTimer);
-    cancelAnimationFrame(programmaticFrame);
+    cancelAnimationFrame(cleanupFrame);
     clearPageTurnBackside(engine);
     engine.host.style.visibility = 'hidden';
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
     schedulePageTurnPrewarm(40);
+  };
+
+  const cleanup = () => {
+    if (settled || cleanupQueued) return;
+    clearTimeout(fallbackTimer);
+    cancelAnimationFrame(programmaticFrame);
+    if (!liveCommitted) return finishCleanup();
+    cleanupQueued = true;
+    let framesRemaining = 3;
+    const waitForLivePagePaint = () => {
+      cleanupFrame = requestAnimationFrame(() => {
+        framesRemaining--;
+        if (framesRemaining > 0) waitForLivePagePaint();
+        else finishCleanup();
+      });
+    };
+    waitForLivePagePaint();
   };
 
   const setProgress = value => {
