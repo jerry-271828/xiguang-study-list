@@ -40,11 +40,20 @@ test('keeps missed task geometry inside the original row', async ({ page }) => {
   await page.locator('[data-status-index="0"]').click();
   await expect(task).toHaveClass(/missed/);
   await page.waitForTimeout(450);
-  const missed = await task.boundingBox();
+  const missed = await task.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return {
+      x: rect.x,
+      width: rect.width,
+      height: rect.height,
+      borderRadius: getComputedStyle(element).borderRadius
+    };
+  });
 
   expect(Math.abs(missed.x - initial.x)).toBeLessThanOrEqual(0.5);
   expect(Math.abs(missed.width - initial.width)).toBeLessThanOrEqual(0.5);
   expect(Math.abs(missed.height - initial.height)).toBeLessThanOrEqual(0.5);
+  expect(missed.borderRadius).toBe('0px');
 });
 
 test('grows editable task lines, wraps with repeated rules, and centers row controls', async ({ page }) => {

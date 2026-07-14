@@ -123,7 +123,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .task.done::after, .task.exempt::after { transform: scaleX(1); }
 .task.done .status-button { color: var(--paper); background: var(--sage); border-color: var(--sage); }
 .task.done .status-button svg { animation: checkPop .42s var(--ease-spring); }
-.task.missed { color: var(--red); background: var(--red-soft); border-radius: 7px; border-bottom-color: transparent; box-shadow: inset 0 0 0 1px rgba(164,75,69,.12), inset 3px 0 rgba(164,75,69,.42); animation: alertIn .38s var(--ease-out); }
+.task.missed { color: var(--red); background: var(--red-soft); border-radius: 0; border-bottom-color: transparent; box-shadow: inset 0 0 0 1px rgba(164,75,69,.12), inset 3px 0 rgba(164,75,69,.42); animation: alertIn .38s var(--ease-out); }
 .task.missed .status-button { color: #8b6412; background: var(--yellow); border-color: var(--yellow); }
 .task.missed .status-button svg { animation: warnPulse .48s var(--ease-spring); }
 .task.exempt { color: #577d70; background: linear-gradient(100deg, transparent 10%, rgba(145,210,191,.25) 43%, rgba(208,169,227,.25) 55%, transparent 90%); background-size: 220% 100%; animation: shimmer 3s linear infinite; }
