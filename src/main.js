@@ -623,6 +623,14 @@ function render() {
   autoGrowTextareas();
 }
 
+function finishPageAnimations() {
+  const page = document.querySelector('.page');
+  page?.getAnimations({ subtree: true }).forEach(animation => {
+    if (animation.effect?.getTiming().iterations === Infinity) return;
+    try { animation.finish(); } catch {}
+  });
+}
+
 function syncTaskStatus(button, status) {
   const task = button.closest('.task');
   if (!task) return;
@@ -853,6 +861,7 @@ function createPageTurn(oldPage, targetDate, direction) {
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+  host.dataset.pageTurnModel = 'flexible-sheet';
   host.dataset.pageTurnTranslucent = 'true';
   host.setAttribute('aria-hidden', 'true');
   host.inert = true;
@@ -871,17 +880,27 @@ function createPageTurn(oldPage, targetDate, direction) {
   const style = document.createElement('style');
   style.textContent = `${serializedPageStyles()}
     :host { display:block; color:var(--ink); font-family:'Urbanist','PingFang SC',sans-serif; }
-    .page-turn-stage { position:absolute; inset:0; perspective:1800px; transform-style:preserve-3d; }
-    .page-turn-base, .page-turn-leaf, .page-turn-face { position:absolute; inset:0; }
-    .page-turn-base, .page-turn-face { overflow:hidden; background:var(--paper); }
+    .page-turn-stage { position:absolute; inset:0; perspective:1900px; transform-style:preserve-3d; }
+    .page-turn-base, .page-turn-leaf { position:absolute; inset:0; }
+    .page-turn-base { overflow:hidden; background:var(--paper); }
     .page-turn-base { z-index:0; }
-    .page-turn-leaf {
-      z-index:2;
-      transform-origin:left center;
+    .page-turn-leaf { z-index:2; transform-style:preserve-3d; }
+    .page-turn-segment {
+      position:absolute;
+      top:0;
+      bottom:0;
       transform-style:preserve-3d;
-      will-change:transform, filter;
+      transform-origin:center center;
+      will-change:transform, filter, box-shadow;
     }
-    .page-turn-face { backface-visibility:hidden; transform-style:preserve-3d; }
+    .page-turn-face {
+      position:absolute;
+      inset:0;
+      overflow:hidden;
+      background:var(--paper);
+      backface-visibility:hidden;
+      transform-style:preserve-3d;
+    }
     .page-turn-front { z-index:2; }
     .page-turn-back {
       transform:rotateY(180deg);
@@ -902,17 +921,19 @@ function createPageTurn(oldPage, targetDate, direction) {
       inset:0;
       background:linear-gradient(90deg, rgba(52,47,39,.09), rgba(246,243,235,.6) 13%, rgba(246,243,235,.54) 78%, rgba(255,255,255,.7));
     }
-    .page-turn-leaf::after {
+    .page-turn-fold-shade {
       content:'';
       position:absolute;
-      z-index:4;
-      top:0;
-      right:-1px;
-      bottom:0;
-      width:9px;
-      background:linear-gradient(90deg, rgba(52,47,39,.11), rgba(255,255,255,.68) 48%, rgba(52,47,39,.08));
-      transform:translateZ(1px);
-      opacity:var(--edge-opacity, .72);
+      z-index:30;
+      top:-1%;
+      bottom:-1%;
+      left:0;
+      width:82px;
+      pointer-events:none;
+      opacity:0;
+      background:linear-gradient(90deg, transparent 0%, rgba(52,47,39,.1) 34%, rgba(52,47,39,.2) 47%, rgba(255,255,255,.62) 52%, rgba(52,47,39,.08) 57%, transparent 100%);
+      filter:blur(1.2px);
+      will-change:transform, opacity;
     }
     .page-turn-snapshot.page {
       width:100%;
@@ -923,17 +944,22 @@ function createPageTurn(oldPage, targetDate, direction) {
       box-shadow:none;
     }
     .page-turn-snapshot.page::before { position:absolute; }
+    .page-turn-segment-copy.page {
+      position:absolute;
+      top:0;
+      left:var(--snapshot-left) !important;
+      width:var(--page-width) !important;
+      max-width:none;
+      min-width:var(--page-width);
+    }
     .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
       animation:none !important;
       transition:none !important;
       caret-color:transparent !important;
     }
+    .page-turn-back-mirror { position:absolute; inset:0; overflow:hidden; transform:scaleX(-1); }
     .page-turn-ghost {
-      position:absolute;
       z-index:1;
-      inset:0;
-      transform:scaleX(-1);
-      transform-origin:center;
       opacity:var(--transmission, .2);
       filter:grayscale(1) contrast(.92) blur(.4px);
       mix-blend-mode:multiply;
@@ -944,46 +970,100 @@ function createPageTurn(oldPage, targetDate, direction) {
   stage.className = 'page-turn-stage';
   const leaf = document.createElement('div');
   leaf.className = `page-turn-leaf ${direction > 0 ? 'next' : 'prev'}`;
-  const front = document.createElement('div');
-  front.className = 'page-turn-face page-turn-front';
-  const back = document.createElement('div');
-  back.className = 'page-turn-face page-turn-back';
+  const foldShade = document.createElement('div');
+  foldShade.className = 'page-turn-fold-shade';
+  const sourceSnapshot = direction > 0 ? oldSnapshot : targetSnapshot;
+  const snapshotsToPrepare = direction > 0 ? [targetSnapshot] : [];
 
   if (direction > 0) {
     const base = document.createElement('div');
     base.className = 'page-turn-base';
     base.append(targetSnapshot);
     stage.append(base);
-    front.append(oldSnapshot);
-  } else {
-    front.append(targetSnapshot);
   }
-  back.append(ghostSnapshot);
-  leaf.append(front, back);
-  stage.append(leaf);
+
+  const segmentCount = 14;
+  const segmentWidth = oldRect.width / segmentCount;
+  const segments = [];
+  for (let index = 0; index < segmentCount; index++) {
+    const segmentLeft = index * segmentWidth;
+    const visibleWidth = Math.min(segmentWidth + 2, oldRect.width - segmentLeft);
+    const segment = document.createElement('div');
+    segment.className = 'page-turn-segment';
+    segment.style.left = `${segmentLeft}px`;
+    segment.style.width = `${visibleWidth}px`;
+
+    const front = document.createElement('div');
+    front.className = 'page-turn-face page-turn-front';
+    const frontCopy = sourceSnapshot.cloneNode(true);
+    frontCopy.classList.add('page-turn-segment-copy');
+    frontCopy.style.setProperty('--page-width', `${oldRect.width}px`);
+    frontCopy.style.setProperty('--snapshot-left', `${-segmentLeft}px`);
+    front.append(frontCopy);
+
+    const back = document.createElement('div');
+    back.className = 'page-turn-face page-turn-back';
+    const mirror = document.createElement('div');
+    mirror.className = 'page-turn-back-mirror';
+    const backCopy = ghostSnapshot.cloneNode(true);
+    backCopy.classList.add('page-turn-segment-copy');
+    backCopy.style.setProperty('--page-width', `${oldRect.width}px`);
+    backCopy.style.setProperty('--snapshot-left', `${-(oldRect.width - segmentLeft - visibleWidth)}px`);
+    mirror.append(backCopy);
+    back.append(mirror);
+
+    segment.append(front, back);
+    leaf.append(segment);
+    segments.push({ element: segment, center: segmentLeft + visibleWidth / 2 });
+    if (direction < 0) snapshotsToPrepare.push(frontCopy);
+  }
+
+  stage.append(leaf, foldShade);
   shadow.append(style, stage);
   document.body.append(host);
-  [oldSnapshot, targetSnapshot, ghostSnapshot].forEach(preparePageTurnSnapshot);
+  snapshotsToPrepare.forEach(preparePageTurnSnapshot);
 
   let progress = 0;
   let animationFrame = 0;
   let settled = false;
   let settleCommit = null;
+  let liveCommitted = false;
 
   const setProgress = value => {
     progress = Math.max(0, Math.min(1, value));
     const phase = Math.sin(Math.PI * progress);
-    const leafProgress = direction > 0 ? progress : 1 - progress;
-    const angle = -178 * leafProgress;
-    const projectedWidth = oldRect.width * Math.cos(Math.abs(angle) * Math.PI / 180);
-    const foldEdge = oldRect.width * (direction > 0 ? 1 - progress : progress);
-    const offsetX = foldEdge - Math.max(0, projectedWidth);
-    const shadowWidth = Math.round(10 + phase * 24);
-    const shadowAlpha = (.07 + phase * .16).toFixed(3);
-    leaf.style.transform = `translateX(${offsetX}px) rotateY(${angle}deg) skewY(${-phase * .34}deg)`;
-    leaf.style.filter = `brightness(${(1 - phase * .16).toFixed(3)})`;
-    leaf.style.boxShadow = `${shadowWidth}px 0 ${shadowWidth + 8}px rgba(52,47,39,${shadowAlpha})`;
-    leaf.style.setProperty('--edge-opacity', String(.5 + phase * .42));
+    const paperProgress = direction > 0 ? progress : 1 - progress;
+    const radius = Math.max(30, Math.min(46, oldRect.width * .115));
+    const curlLength = Math.PI * radius;
+    const foldStart = oldRect.width * (1 - paperProgress) - curlLength * Math.pow(paperProgress, 3);
+
+    segments.forEach(({ element, center }) => {
+      const distance = center - foldStart;
+      let screenX = center;
+      let angle = 0;
+      let depth = 0;
+      let curl = 0;
+      if (distance > 0 && distance < curlLength) {
+        const theta = distance / radius;
+        screenX = foldStart + radius * Math.sin(theta);
+        angle = -theta * 180 / Math.PI;
+        depth = radius * (1 - Math.cos(theta));
+        curl = Math.sin(theta);
+      } else if (distance >= curlLength) {
+        screenX = foldStart - (distance - curlLength);
+        angle = -180;
+        depth = radius * 2;
+      }
+      const offsetX = screenX - center;
+      element.style.transform = `translate3d(${offsetX}px,0,${depth}px) rotateY(${angle}deg)`;
+      element.style.filter = `brightness(${(1 - Math.max(0, curl) * .18).toFixed(3)})`;
+      element.style.boxShadow = 'none';
+      element.style.zIndex = String(10 + Math.round(depth));
+    });
+
+    const visibleFold = Math.max(-82, Math.min(oldRect.width, foldStart + radius));
+    foldShade.style.transform = `translateX(${visibleFold - 41}px)`;
+    foldShade.style.opacity = String(phase * .86);
     host.style.setProperty('--transmission', String(.12 + phase * .09));
     host.dataset.pageTurnProgress = progress.toFixed(3);
   };
@@ -997,10 +1077,12 @@ function createPageTurn(oldPage, targetDate, direction) {
   const finalize = commit => {
     if (settled) return;
     settled = true;
-    if (commit) {
+    if (commit && !liveCommitted) {
       selectedDate = new Date(targetDate);
       pageMotion = '';
       render();
+      finishPageAnimations();
+      liveCommitted = true;
     }
     cleanup();
   };
@@ -1028,6 +1110,14 @@ function createPageTurn(oldPage, targetDate, direction) {
     host,
     setProgress,
     get progress() { return progress; },
+    commitLivePage() {
+      if (liveCommitted) return;
+      selectedDate = new Date(targetDate);
+      pageMotion = '';
+      render();
+      finishPageAnimations();
+      liveCommitted = true;
+    },
     settle(commit) { animateTo(commit ? 1 : 0, commit); },
     finishImmediately(commit = settleCommit ?? progress >= .46) {
       cancelAnimationFrame(animationFrame);
@@ -1061,6 +1151,7 @@ function switchDay(direction) {
     return;
   }
   const turn = createPageTurn(oldPage, next, direction);
+  turn?.commitLivePage();
   requestAnimationFrame(() => turn?.settle(true));
 }
 

@@ -149,9 +149,15 @@ test('keeps the page canvas anchored during rapid mobile paging', async ({ page 
 test('turns an isolated paper layer while the live page stays fixed', async ({ page }) => {
   await page.locator('[data-action="next-day"]').click();
 
-  const turnLayer = page.locator('[data-page-turn="next"]');
-  await expect(turnLayer).toBeAttached();
-  expect(await turnLayer.evaluate(element => getComputedStyle(element).pointerEvents)).toBe('none');
+  const turnState = await page.evaluate(() => {
+    const element = document.querySelector('[data-page-turn="next"]');
+    return {
+      attached: Boolean(element),
+      model: element?.dataset.pageTurnModel,
+      pointerEvents: element ? getComputedStyle(element).pointerEvents : null
+    };
+  });
+  expect(turnState).toEqual({ attached: true, model: 'flexible-sheet', pointerEvents: 'none' });
 
   const geometry = await page.locator('.page').evaluate(element => {
     const rect = element.getBoundingClientRect();
@@ -166,6 +172,10 @@ test('turns an isolated paper layer while the live page stays fixed', async ({ p
   expect(Math.abs(geometry.right - geometry.viewport)).toBeLessThanOrEqual(0.5);
   expect(geometry.transform).toBe('none');
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 14');
+  const runningFiniteAnimations = await page.locator('.page').evaluate(element => element.getAnimations({ subtree: true })
+    .filter(animation => animation.effect.getTiming().iterations !== Infinity && animation.playState === 'running')
+    .map(animation => animation.animationName));
+  expect(runningFiniteAnimations).toEqual([]);
 });
 
 test('drives the page angle from touch distance and reveals translucent paper', async ({ page }) => {
