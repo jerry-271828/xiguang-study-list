@@ -63,11 +63,52 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .task { min-height: 58px; display: grid; grid-template-columns: 30px 1fr 38px; align-items: center; border-bottom: 1px solid var(--line); position: relative; transition: background .35s, color .35s, opacity .35s, box-shadow .35s; overflow: hidden; animation: taskEnter .42s calc(var(--item-order, 0) * 28ms) var(--ease-out) both; }
 .task::after { content: ''; position: absolute; left: 26px; right: 48px; top: 50%; height: 1px; background: currentColor; transform: scaleX(0); transform-origin: left; transition: transform .42s cubic-bezier(.3,.8,.2,1); pointer-events: none; }
 .task-number { color: var(--muted); font-size: 12px; align-self: center; }
-.task-content { min-width: 0; display: flex; align-items: baseline; gap: 5px; font-family: 'Noto Serif SC', serif; font-size: 14px; line-height: 1.7; }
-.line-input { width: clamp(42px, 14vw, 90px); min-width: 42px; padding: 2px 3px; border: 0; border-bottom: 1px solid var(--sage); outline: none; background: transparent; border-radius: 0; }
-.line-input.full { width: 100%; }
-.line-input:focus { border-bottom-color: var(--ink); box-shadow: 0 4px 4px -4px var(--sage); }
-.status-button { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; justify-self: end; transition: transform .28s var(--ease-spring), color .28s, background .28s, border-color .28s, box-shadow .28s; }
+.task-content { min-width: 0; padding: 10px 0; display: flex; align-items: flex-start; gap: 5px; font-family: 'Noto Serif SC', serif; font-size: 14px; line-height: 1.7; }
+.task-content > span:not(.line-input-shell) { flex: 0 0 auto; white-space: nowrap; }
+.line-input-shell {
+  --input-rule: var(--sage);
+  --input-line-step: 1.7em;
+  display: block;
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  min-width: 42px;
+  max-width: 100%;
+}
+.line-input-shell::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: calc(2px + var(--input-line-step) - 1px);
+  right: 0;
+  bottom: 2px;
+  left: 0;
+  pointer-events: none;
+  background-image: linear-gradient(to bottom, var(--input-rule) 0, var(--input-rule) 1px, transparent 1px);
+  background-position: 0 0;
+  background-repeat: repeat-y;
+  background-size: 100% var(--input-line-step);
+}
+.line-input {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: calc(var(--input-line-step) + 4px);
+  padding: 2px 3px;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.line-input-shell:focus-within { --input-rule: var(--ink); }
+.status-button { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; justify-self: end; align-self: center; transition: transform .28s var(--ease-spring), color .28s, background .28s, border-color .28s, box-shadow .28s; }
 .status-button svg { width: 15px; height: 15px; }
 .status-button:active { transform: scale(.82); }
 .task.done { color: var(--muted); opacity: .57; }
@@ -308,7 +349,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .task-content { font-size: 12.5px; }
   .task { grid-template-columns: 25px 1fr 34px; }
   .status-button { width: 27px; height: 27px; }
-  .line-input { width: 42px; }
+  .line-input-shell { min-width: 42px; }
   .mini-day { height: 130px; }
 }
 @media (prefers-reduced-motion: reduce) {

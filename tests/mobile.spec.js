@@ -47,6 +47,55 @@ test('keeps missed task geometry inside the original row', async ({ page }) => {
   expect(Math.abs(missed.height - initial.height)).toBeLessThanOrEqual(0.5);
 });
 
+test('grows editable task lines, wraps with repeated rules, and centers row controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const input = page.locator('[data-extra-index="3"]');
+  const task = page.locator('[data-task-index="3"]');
+  const initialInput = await input.boundingBox();
+
+  await input.fill('disjffnvidsfb');
+  const shortInput = await input.boundingBox();
+  expect(shortInput.width).toBeGreaterThan(initialInput.width);
+  expect(Math.abs(shortInput.height - initialInput.height)).toBeLessThanOrEqual(1);
+
+  await input.fill('这是一段需要在达到一行上限之后自动换行并继续显示新横线的待办事项内容'.repeat(3));
+  const metrics = await task.evaluate(element => {
+    const inputElement = element.querySelector('.line-input');
+    const inputShell = element.querySelector('.line-input-shell');
+    const content = element.querySelector('.task-content');
+    const number = element.querySelector('.task-number');
+    const button = element.querySelector('.status-button');
+    const taskRect = element.getBoundingClientRect();
+    const inputRect = inputElement.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    const numberRect = number.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const ruleStyle = getComputedStyle(inputShell, '::after');
+    const taskCenter = taskRect.top + taskRect.height / 2;
+    return {
+      inputHeight: inputRect.height,
+      inputRight: inputRect.right,
+      contentRight: contentRect.right,
+      scrollHeight: inputElement.scrollHeight,
+      clientHeight: inputElement.clientHeight,
+      taskHeight: taskRect.height,
+      numberCenterDelta: Math.abs(numberRect.top + numberRect.height / 2 - taskCenter),
+      buttonCenterDelta: Math.abs(buttonRect.top + buttonRect.height / 2 - taskCenter),
+      backgroundImage: ruleStyle.backgroundImage,
+      backgroundRepeat: ruleStyle.backgroundRepeat
+    };
+  });
+
+  expect(metrics.inputHeight).toBeGreaterThan(shortInput.height * 2);
+  expect(metrics.taskHeight).toBeGreaterThan(58);
+  expect(metrics.inputRight).toBeLessThanOrEqual(metrics.contentRight + 0.5);
+  expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+  expect(metrics.numberCenterDelta).toBeLessThanOrEqual(0.5);
+  expect(metrics.buttonCenterDelta).toBeLessThanOrEqual(0.5);
+  expect(metrics.backgroundImage).toContain('linear-gradient');
+  expect(metrics.backgroundRepeat).toBe('repeat-y');
+});
+
 test('keeps the page canvas anchored during rapid mobile paging', async ({ page }) => {
   const samples = [];
   for (let turn = 0; turn < 5; turn += 1) {

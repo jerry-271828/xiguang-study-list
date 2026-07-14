@@ -245,9 +245,9 @@ function weekdayItems(date) {
     const extra = record.items[index]?.extra || '';
     let content;
     if (item.editable === 'full') {
-      content = `<input class="line-input full" data-extra-index="${index}" value="${escapeHtml(extra)}" aria-label="第 ${index + 1} 项内容" />`;
+      content = `<span class="line-input-shell full"><textarea class="line-input full" rows="1" data-extra-index="${index}" aria-label="第 ${index + 1} 项内容">${escapeHtml(extra)}</textarea></span>`;
     } else if (item.editable === 'suffix') {
-      content = `<span>${item.text}</span><input class="line-input" data-extra-index="${index}" value="${escapeHtml(extra)}" aria-label="补充第 ${index + 1} 项" />${item.tail ? `<span>${item.tail}</span>` : ''}`;
+      content = `<span>${item.text}</span><span class="line-input-shell"><textarea class="line-input" rows="1" data-extra-index="${index}" aria-label="补充第 ${index + 1} 项">${escapeHtml(extra)}</textarea></span>${item.tail ? `<span>${item.tail}</span>` : ''}`;
     } else content = `<span>${item.text}</span>`;
     return `<div class="task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
@@ -677,7 +677,51 @@ function changeView(view) {
   render();
 }
 
+let lineInputMeasure;
+function measuredLineInputWidth(element) {
+  if (!lineInputMeasure) {
+    lineInputMeasure = document.createElement('span');
+    lineInputMeasure.setAttribute('aria-hidden', 'true');
+    Object.assign(lineInputMeasure.style, {
+      position: 'fixed',
+      left: '-10000px',
+      top: '0',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      whiteSpace: 'pre'
+    });
+    document.body.append(lineInputMeasure);
+  }
+  const style = getComputedStyle(element);
+  lineInputMeasure.style.font = style.font;
+  lineInputMeasure.style.letterSpacing = style.letterSpacing;
+  lineInputMeasure.style.paddingLeft = style.paddingLeft;
+  lineInputMeasure.style.paddingRight = style.paddingRight;
+  lineInputMeasure.textContent = element.value || ' ';
+  return Math.ceil(lineInputMeasure.getBoundingClientRect().width + 2);
+}
+
+function autoGrowLineInput(element) {
+  const container = element.closest('.task-content');
+  const shell = element.closest('.line-input-shell');
+  if (!container || !shell) return;
+  const children = [...container.children];
+  const containerStyle = getComputedStyle(container);
+  const shellStyle = getComputedStyle(shell);
+  const gap = Number.parseFloat(containerStyle.columnGap) || 0;
+  const occupiedWidth = children
+    .filter(child => child !== shell)
+    .reduce((total, child) => total + child.getBoundingClientRect().width, 0);
+  const minWidth = Number.parseFloat(shellStyle.minWidth) || 42;
+  const maxWidth = Math.max(minWidth, container.clientWidth - occupiedWidth - gap * Math.max(0, children.length - 1));
+  const nextWidth = Math.min(maxWidth, Math.max(minWidth, measuredLineInputWidth(element)));
+  shell.style.width = `${nextWidth}px`;
+  element.style.height = 'auto';
+  element.style.height = `${Math.ceil(element.scrollHeight)}px`;
+}
+
 function autoGrowTextareas() {
+  document.querySelectorAll('.line-input').forEach(autoGrowLineInput);
   document.querySelectorAll('.saturday-task textarea').forEach(element => {
     element.style.height = 'auto';
     element.style.height = `${element.scrollHeight}px`;
@@ -749,6 +793,7 @@ app.addEventListener('input', event => {
     const record = dayRecord(selectedDate);
     record.items[extraIndex] = { ...record.items[extraIndex], extra: event.target.value };
     save();
+    autoGrowLineInput(event.target);
   }
   if (saturdayIndex !== undefined) {
     const record = dayRecord(selectedDate);
@@ -814,4 +859,6 @@ app.addEventListener('touchend', event => {
 app.addEventListener('touchcancel', () => { gesture = null; });
 
 window.addEventListener('beforeunload', () => localStorage.setItem(STORE_KEY, JSON.stringify(data)));
+window.addEventListener('resize', () => requestAnimationFrame(autoGrowTextareas));
+document.fonts?.ready.then(autoGrowTextareas);
 render();
