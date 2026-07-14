@@ -193,6 +193,46 @@ test('keeps the previous-page animation between different day layouts', async ({
   await expect(page.locator('.page-turn-host')).toBeHidden();
 });
 
+test('keeps both swipe directions animated from the Saturday layout', async ({ page }) => {
+  const openSaturday = async () => {
+    await page.locator('[data-action="menu"]').click();
+    await page.getByRole('button', { name: /月视图/ }).click();
+    await page.locator('[data-date="2026-07-18"]').click();
+    await expect(page.locator('.date-heading strong')).toHaveText('07 / 18');
+  };
+  const startSwipe = async (startX, moveX, identifier) => page.evaluate(({ startX, moveX, identifier }) => {
+    const target = document.querySelector('#app');
+    const touch = x => new Touch({ identifier, target, clientX: x, clientY: 360 });
+    const start = touch(startX);
+    const move = touch(moveX);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+  }, { startX, moveX, identifier });
+  const finishSwipe = async (endX, identifier) => page.evaluate(({ endX, identifier }) => {
+    const target = document.querySelector('#app');
+    const end = new Touch({ identifier, target, clientX: endX, clientY: 360 });
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  }, { endX, identifier });
+
+  await openSaturday();
+  await startSwipe(340, 200, 31);
+  await expect(page.locator('.page-turn-host')).toHaveAttribute('data-page-turn-state', 'user_fold');
+  await expect(page.locator('.page-turn-host')).toBeVisible();
+  await finishSwipe(35, 31);
+  await expect(page.locator('.stats-page')).toBeVisible();
+  await expect(page.locator('.stats-hero h1')).toContainText('07 / 13 — 07 / 19');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+
+  await openSaturday();
+  await startSwipe(45, 200, 32);
+  await expect(page.locator('.page-turn-host')).toHaveAttribute('data-page-turn-state', 'user_fold');
+  await expect(page.locator('.page-turn-host')).toBeVisible();
+  await finishSwipe(355, 32);
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 17');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+});
+
 test('drives StPageFlip from touch distance', async ({ page }) => {
   await page.evaluate(() => {
     const target = document.querySelector('#app');

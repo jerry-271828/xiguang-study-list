@@ -246,9 +246,9 @@ function weekdayItems(date) {
     const extra = record.items[index]?.extra || '';
     let content;
     if (item.editable === 'full') {
-      content = `<span class="line-input-shell full"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input full" rows="1" data-extra-index="${index}" aria-label="第 ${index + 1} 项内容">${escapeHtml(extra)}</textarea></span>`;
+      content = `<span class="line-input-shell full"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input full" name="day-${dateKey(date)}-extra-${index}" rows="1" data-extra-index="${index}" aria-label="第 ${index + 1} 项内容">${escapeHtml(extra)}</textarea></span>`;
     } else if (item.editable === 'suffix') {
-      content = `<span>${item.text}</span><span class="line-input-shell"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input" rows="1" data-extra-index="${index}" aria-label="补充第 ${index + 1} 项">${escapeHtml(extra)}</textarea></span>${item.tail ? `<span>${item.tail}</span>` : ''}`;
+      content = `<span>${item.text}</span><span class="line-input-shell"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input" name="day-${dateKey(date)}-extra-${index}" rows="1" data-extra-index="${index}" aria-label="补充第 ${index + 1} 项">${escapeHtml(extra)}</textarea></span>${item.tail ? `<span>${item.tail}</span>` : ''}`;
     } else content = `<span>${item.text}</span>`;
     return `<div class="task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
@@ -264,7 +264,7 @@ function saturdayItems(date) {
     const status = itemStatus(date, index);
     return `<div class="task saturday-task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
-      <textarea rows="1" data-saturday-index="${index}" aria-label="第 ${index + 1} 项">${escapeHtml(text)}</textarea>
+      <textarea name="day-${dateKey(date)}-saturday-${index}" rows="1" data-saturday-index="${index}" aria-label="第 ${index + 1} 项">${escapeHtml(text)}</textarea>
       ${statusButton(date, index, true)}
     </div>`;
   }).join('');
@@ -287,7 +287,7 @@ function dayView() {
     ${quoteBlock(selectedDate)}
     ${dateHeading(selectedDate, saturday ? '自由书写' : '循序而行')}
     ${saturday ? `<h1 class="saturday-title">今日总目标</h1><section class="task-list saturday-list">${saturdayItems(selectedDate)}</section>` : `<section class="task-list">${weekdayItems(selectedDate)}</section>`}
-    ${saturday ? '' : `<section class="journal"><label for="journal">日结 / 日记</label><textarea id="journal" placeholder="今日留下的光……">${escapeHtml(dayRecord(selectedDate).journal)}</textarea><span>自动保存</span></section>`}
+    ${saturday ? '' : `<section class="journal"><label for="journal">日结 / 日记</label><textarea id="journal" name="day-${dateKey(selectedDate)}-journal" placeholder="今日留下的光……">${escapeHtml(dayRecord(selectedDate).journal)}</textarea><span>自动保存</span></section>`}
     <button class="week-stat-jump" data-nav="sunday"><span>本周小结</span>${icons.arrow}</button>
   </main>`;
 }
@@ -673,7 +673,7 @@ async function copyText(text) {
 }
 
 function changeView(view) {
-  activePageTurn?.finishImmediately(false);
+  if (activePageTurn) return;
   if (view === 'sunday') {
     previousView = currentView === 'day' ? 'day' : currentView;
     statsReturnDate = new Date(selectedDate);
@@ -823,7 +823,25 @@ function serializedPageStyles() {
   return pageTurnStyles;
 }
 
-function clonePageSnapshot(source) {
+function namespaceSnapshotIds(snapshot, namespace) {
+  const idMap = new Map();
+  snapshot.querySelectorAll('[id]').forEach((element, index) => {
+    const original = element.id;
+    const unique = `page-turn-${namespace}-${original}-${index}`;
+    idMap.set(original, unique);
+    element.id = unique;
+  });
+  const referenceAttributes = ['for', 'aria-controls', 'aria-labelledby', 'aria-describedby'];
+  referenceAttributes.forEach(attribute => {
+    snapshot.querySelectorAll(`[${attribute}]`).forEach(element => {
+      const references = element.getAttribute(attribute).split(/\s+/);
+      element.setAttribute(attribute, references.map(reference => idMap.get(reference) || reference).join(' '));
+    });
+  });
+  return snapshot;
+}
+
+function clonePageSnapshot(source, namespace = 'current') {
   const snapshot = source.cloneNode(true);
   snapshot.classList.add('page-turn-snapshot');
   const sourceFields = source.querySelectorAll('input, textarea, select');
@@ -834,7 +852,7 @@ function clonePageSnapshot(source) {
     copy.value = field.value;
     if ('checked' in field) copy.checked = field.checked;
   });
-  return snapshot;
+  return namespaceSnapshotIds(snapshot, namespace);
 }
 
 function pageSnapshotForDate(date) {
@@ -848,7 +866,7 @@ function pageSnapshotForDate(date) {
   }
   const snapshot = template.content.firstElementChild;
   snapshot?.classList.add('page-turn-snapshot');
-  return snapshot;
+  return snapshot ? namespaceSnapshotIds(snapshot, dateKey(date)) : null;
 }
 
 function preparePageTurnSnapshot(snapshot) {
@@ -930,8 +948,9 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     pageTurnEngine?.controller?.onFlip(Number(event.data));
   });
   pageFlip.on('changeState', event => {
-    host.dataset.pageTurnState = String(event.data);
-    if (event.data === 'read') pageTurnEngine?.controller?.onRead();
+    const state = String(event.data);
+    host.dataset.pageTurnState = state;
+    pageTurnEngine?.controller?.onState(state);
   });
   pageFlip.loadFromHTML(pages);
   snapshots.forEach(preparePageTurnSnapshot);
@@ -960,7 +979,7 @@ function buildPageTurnPages(date, oldPage, contentOffsetY) {
   if (inRange(next)) dates.push(next);
 
   const snapshots = dates.map(item => dateKey(item) === dateKey(date)
-    ? clonePageSnapshot(oldPage)
+    ? clonePageSnapshot(oldPage, dateKey(item))
     : pageSnapshotForDate(item));
   snapshots.forEach(snapshot => snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`));
   const pages = snapshots.map(snapshot => {
@@ -1051,6 +1070,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   let lastPoint = null;
   let fallbackTimer = 0;
   let programmaticFrame = 0;
+  let observedActiveState = false;
   const viewportTop = Number.parseFloat(engine.host.style.top) || 0;
   const startY = Math.max(2, Math.min(engine.height - 2, (touchY ?? viewportTop + engine.height * .35) - viewportTop));
   const startPoint = { x: direction > 0 ? engine.width - 2 : 2, y: startY };
@@ -1098,7 +1118,10 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     get progress() { return progress; },
     commitLivePage,
     onFlip(index) { if (index === targetIndex) commitLivePage(); },
-    onRead: cleanup,
+    onState(state) {
+      if (state === 'user_fold' || state === 'flipping') observedActiveState = true;
+      else if (state === 'read' && observedActiveState) cleanup();
+    },
     startProgrammatic() {
       fallbackTimer = window.setTimeout(() => { commitLivePage(); cleanup(); }, 1200);
       const startedAt = performance.now();
@@ -1118,12 +1141,6 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
       setProgress(commit ? Math.max(progress, .54) : Math.min(progress, .42));
       engine.pageFlip.userStop(lastPoint, false);
       fallbackTimer = window.setTimeout(() => { if (commit) commitLivePage(); cleanup(); }, 1200);
-    },
-    finishImmediately(commit = progress >= .46) {
-      engine.pageFlip.getRender().finishAnimation();
-      engine.pageFlip.turnToPage(commit ? targetIndex : engine.currentIndex);
-      if (commit) commitLivePage();
-      cleanup();
     }
   };
   engine.host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
@@ -1142,7 +1159,7 @@ function beginGesturePageTurn(direction, touchY) {
 }
 
 function switchDay(direction) {
-  activePageTurn?.finishImmediately(true);
+  if (activePageTurn) return;
   const next = addDays(selectedDate, direction);
   if (!inRange(next)) return;
   const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -1256,7 +1273,10 @@ app.addEventListener('touchstart', event => {
     gesture = { pinch: true, startDistance: Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY) };
     event.preventDefault();
   } else if (event.touches.length === 1 && !isInputTarget(event.target)) {
-    activePageTurn?.finishImmediately(true);
+    if (activePageTurn) {
+      gesture = null;
+      return;
+    }
     const touch = event.touches[0];
     gesture = {
       pinch: false,
