@@ -988,12 +988,12 @@ function clearPageTurnBackside(engine) {
   engine.book.querySelectorAll('.page-turn-backside').forEach(page => page.classList.remove('page-turn-backside'));
 }
 
-function showPageTurnBackside(engine, direction, targetIndex) {
+function showPageTurnBackside(engine) {
   clearPageTurnBackside(engine);
-  const sheetDate = direction > 0 ? engine.dateKeys[engine.currentIndex] : engine.dateKeys[targetIndex];
+  const sheetDate = engine.dateKeys[engine.currentIndex];
   const matchingPages = [...engine.book.querySelectorAll('.page-turn-page')]
     .filter(page => page.dataset.pageTurnDate === sheetDate);
-  const backside = direction > 0 ? matchingPages.at(-1) : matchingPages[0];
+  const backside = matchingPages.at(-1);
   backside?.classList.add('page-turn-backside');
 }
 
@@ -1287,7 +1287,9 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (!userTouchStarted) {
       engine.pageFlip.startUserTouch(startPoint);
       engine.pageFlip.userMove({ x: direction > 0 ? engine.width - 10 : 10, y: startY }, true);
-      showPageTurnBackside(engine, direction, targetIndex);
+      if (direction > 0) showPageTurnBackside(engine);
+      else clearPageTurnBackside(engine);
+      engine.host.dataset.pageTurnFace = direction > 0 ? 'back' : 'front';
       userTouchStarted = true;
     }
     lastPoint = {

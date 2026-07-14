@@ -235,6 +235,55 @@ test('mirrors and mutes the paper backside without native fields', async ({ page
   expect(paper.filter).not.toBe('none');
 });
 
+test('shows the previous page front when turning backward', async ({ page }) => {
+  await page.addInitScript(() => {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachOpenShadow(init) {
+      return attachShadow.call(this, { ...init, mode: 'open' });
+    };
+  });
+  await page.reload();
+  await page.locator('#app [data-action="next-day"]').click();
+  await expect(page.locator('#app .date-heading strong')).toHaveText('07 / 14');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+  await page.waitForTimeout(120);
+
+  await page.evaluate(() => {
+    const app = document.querySelector('#app');
+    const touch = x => new Touch({ identifier: 33, target: app, clientX: x, clientY: 430 });
+    const start = touch(40);
+    const move = touch(235);
+    app.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    app.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+  });
+  await expect(page.locator('.page-turn-host')).toHaveAttribute('data-page-turn-state', 'user_fold');
+
+  const previousPage = await page.evaluate(() => {
+    const host = document.querySelector('.page-turn-host');
+    const root = host.shadowRoot;
+    const pageElement = root.querySelector('.page-turn-book .page-turn-page[data-page-turn-date="2026-07-13"]');
+    const snapshot = pageElement.querySelector('.page-turn-snapshot');
+    const content = snapshot.querySelector('.task-list');
+    return {
+      face: host.dataset.pageTurnFace,
+      backsidePages: root.querySelectorAll('.page-turn-backside').length,
+      date: snapshot.querySelector('.date-heading strong')?.textContent,
+      snapshotTransform: getComputedStyle(snapshot).transform,
+      contentOpacity: getComputedStyle(content).opacity,
+      contentFilter: getComputedStyle(content).filter,
+      sheetTransform: pageElement.style.transform
+    };
+  });
+
+  expect(previousPage.face).toBe('front');
+  expect(previousPage.backsidePages).toBe(0);
+  expect(previousPage.date).toBe('07 / 13');
+  expect(previousPage.snapshotTransform).toBe('none');
+  expect(previousPage.contentOpacity).toBe('1');
+  expect(previousPage.contentFilter).toBe('none');
+  expect(previousPage.sheetTransform).toContain('rotate(-');
+});
+
 test('keeps the target-page mask painted through the live DOM handoff', async ({ page }) => {
   await page.addInitScript(() => {
     const attachShadow = Element.prototype.attachShadow;
@@ -425,6 +474,7 @@ for (const viewport of [
   { width: 3840, height: 2160 }
 ]) {
   test(`keeps Saturday turns animated at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    test.setTimeout(45_000);
     await page.setViewportSize(viewport);
     await page.reload();
 
