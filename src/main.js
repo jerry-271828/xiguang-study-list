@@ -170,6 +170,7 @@ let previousView = 'day';
 let menuOpen = false;
 let pageMotion = '';
 let wheelResult = '';
+let wheelResultType = '';
 let wheelOffset = 0;
 let wheelSpinning = false;
 let statsReturnDate = new Date(START);
@@ -408,34 +409,85 @@ function availableSpins() {
   return (record.regularUsed ? 0 : 1) + record.bonusGranted - record.bonusUsed;
 }
 
+const WHEEL_TONES = {
+  '未中': { tone: 'blank', dots: 0 },
+  '免任务': { tone: 'sage', dots: 1 },
+  '免周六': { tone: 'gold', dots: 2 },
+  '免一天': { tone: 'gold', dots: 2 },
+  '免一周': { tone: 'gold', dots: 3 }
+};
+
+function wheelFace(segments) {
+  const px = (radius, angle) => (50 + radius * Math.sin(angle * Math.PI / 180)).toFixed(2);
+  const py = (radius, angle) => (50 - radius * Math.cos(angle * Math.PI / 180)).toFixed(2);
+  const OUTER = 45.5, INNER = 32.5, LABEL_R = 39.8, DOT_R = 34.6;
+  const defs = [], wedges = [], labels = [], marks = [];
+  segments.forEach((segment, index) => {
+    const center = index * 45;
+    const meta = WHEEL_TONES[segment] || WHEEL_TONES['未中'];
+    const from = center - 22.5, to = center + 22.5;
+    wedges.push(`<path class="wedge ${meta.tone}" d="M ${px(OUTER, from)} ${py(OUTER, from)} A ${OUTER} ${OUTER} 0 0 1 ${px(OUTER, to)} ${py(OUTER, to)} L ${px(INNER, to)} ${py(INNER, to)} A ${INNER} ${INNER} 0 0 0 ${px(INNER, from)} ${py(INNER, from)} Z"/>`);
+    let startAngle = center - 17, endAngle = center + 17;
+    const reverse = index >= 3 && index <= 5;
+    if (reverse) [startAngle, endAngle] = [endAngle, startAngle];
+    defs.push(`<path id="wheel-path-${index}" d="M ${px(LABEL_R, startAngle)} ${py(LABEL_R, startAngle)} A ${LABEL_R} ${LABEL_R} 0 0 ${reverse ? 0 : 1} ${px(LABEL_R, endAngle)} ${py(LABEL_R, endAngle)}"/>`);
+    labels.push(`<text class="${meta.tone === 'blank' ? 'is-blank' : 'is-prize'}"><textPath href="#wheel-path-${index}" startOffset="50%">${segment}</textPath></text>`);
+    for (let dot = 0; dot < meta.dots; dot++) {
+      const angle = center + (dot - (meta.dots - 1) / 2) * 3.4;
+      marks.push(`<circle class="rarity ${meta.tone}" cx="${px(DOT_R, angle)}" cy="${py(DOT_R, angle)}" r=".7"/>`);
+    }
+  });
+  const separators = segments.map((_, index) => {
+    const angle = index * 45 + 22.5;
+    return `<line class="separator" x1="${px(INNER, angle)}" y1="${py(INNER, angle)}" x2="${px(OUTER, angle)}" y2="${py(OUTER, angle)}"/>`;
+  }).join('');
+  const ticks = Array.from({ length: 64 }, (_, index) => {
+    const angle = index * 5.625;
+    const major = index % 8 === 4;
+    return `<line class="${major ? 'tick-major' : 'tick'}" x1="${px(major ? 46.4 : 47.5, angle)}" y1="${py(major ? 46.4 : 47.5, angle)}" x2="${px(48.8, angle)}" y2="${py(48.8, angle)}"/>`;
+  }).join('');
+  return `<svg class="wheel-face" viewBox="0 0 100 100" aria-hidden="true">
+    <defs>${defs.join('')}</defs>
+    <circle class="ring-rim" cx="50" cy="50" r="49"/>
+    ${ticks}${wedges.join('')}
+    <circle class="ring-line" cx="50" cy="50" r="${OUTER}"/>
+    <circle class="ring-line" cx="50" cy="50" r="${INNER}"/>
+    ${separators}
+    <circle class="ring-dash" cx="50" cy="50" r="21"/>
+    ${labels.join('')}${marks.join('')}
+  </svg>`;
+}
+
+const probRow = (tone, dots, label, odds) => `<div class="prob-row"><i class="prob-marks ${tone}">${'<b></b>'.repeat(dots)}</i><span>${label}</span><u></u><em>${odds}</em></div>`;
+
 function wheelView() {
-  const record = spinRecord();
   const baseSegments = ['未中', '免任务', '未中', '免任务', '未中', '免周六', '免一周', '免一天'];
   const segments = baseSegments.map((_, index) => baseSegments[(index + wheelOffset) % baseSegments.length]);
-  const wheelLabels = `<svg class="wheel-labels" viewBox="0 0 100 100" aria-hidden="true">
-    <defs>${segments.map((_, index) => {
-      let startAngle = index * 45 - 17;
-      let endAngle = index * 45 + 17;
-      const reverse = index >= 3 && index <= 5;
-      if (reverse) [startAngle, endAngle] = [endAngle, startAngle];
-      const radius = 42;
-      const startX = 50 + radius * Math.sin(startAngle * Math.PI / 180);
-      const startY = 50 - radius * Math.cos(startAngle * Math.PI / 180);
-      const endX = 50 + radius * Math.sin(endAngle * Math.PI / 180);
-      const endY = 50 - radius * Math.cos(endAngle * Math.PI / 180);
-      return `<path id="wheel-path-${index}" d="M ${startX.toFixed(2)} ${startY.toFixed(2)} A ${radius} ${radius} 0 0 ${reverse ? 0 : 1} ${endX.toFixed(2)} ${endY.toFixed(2)}" />`;
-    }).join('')}</defs>
-    ${segments.map((segment, index) => `<text><textPath href="#wheel-path-${index}" startOffset="50%">${segment}</textPath></text>`).join('')}
-  </svg>`;
+  const resultTone = !wheelResult ? '' : wheelResultType === 'none' ? 'is-miss' : 'is-win';
   return `<main class="page wheel-page">${header('摸鱼转盘')}
     <section class="wheel-head"><small>今日剩余 ${availableSpins()} 次</small><h1>让一点好运，替你松开时间。</h1></section>
-    <div class="wheel-stage"><div class="wheel-pointer" aria-hidden="true"><svg viewBox="0 0 44 62"><path class="pointer-tail" d="M17.5 27.5 22 59l4.5-31.5Z"/><circle class="pointer-ring" cx="22" cy="17" r="13"/><circle class="pointer-core" cx="22" cy="17" r="5"/><circle class="pointer-glint" cx="20.4" cy="15.4" r="1.2"/></svg></div><div class="wheel">${wheelLabels}<i>隙光</i></div></div>
+    <div class="wheel-stage">
+      <svg class="stage-marks" viewBox="0 0 100 100" aria-hidden="true"><path d="M4 1.6v4.8M1.6 4h4.8M96 1.6v4.8M93.6 4h4.8M4 93.6v4.8M1.6 96h4.8M96 93.6v4.8M93.6 96h4.8"/></svg>
+      <div class="wheel-pointer" aria-hidden="true"><svg viewBox="0 0 44 62"><path class="pointer-tail" d="M17.5 27.5 22 59l4.5-31.5Z"/><circle class="pointer-ring" cx="22" cy="17" r="13"/><circle class="pointer-core" cx="22" cy="17" r="5"/><circle class="pointer-glint" cx="20.4" cy="15.4" r="1.2"/></svg></div>
+      <div class="wheel">${wheelFace(segments)}</div>
+      <div class="wheel-hub" aria-hidden="true"><b>隙光</b><small>GOOD LUCK</small></div>
+    </div>
+    <div class="wheel-result ${wheelResult ? 'show' : ''} ${resultTone}">${wheelResult
+      ? `<span class="result-slip"><i class="result-seal">${wheelResultType === 'none' ? '空' : '中'}</i><span>${wheelResult}</span></span>`
+      : '<span class="result-hint">每日普通机会 1 次 · 零点刷新</span>'}</div>
     <div class="wheel-actions">
       <button class="primary" data-action="spin" ${availableSpins() <= 0 ? 'disabled' : ''}>转动一次</button>
       <button data-action="exam-spin" ${data.examBonusUsed >= 3 ? 'disabled' : ''}>确认完成试卷 · ${data.examBonusUsed}/3</button>
     </div>
-    <div class="wheel-result ${wheelResult ? 'show' : ''}">${wheelResult || '每日普通机会 1 次，零点刷新'}</div>
-    <section class="probability"><h2>可能遇见</h2><div><span>免下一个工作日某项任务</span><em>8%</em></div><div><span>免周六努力</span><em>0.5%</em></div><div><span>免下个对应工作日全天</span><em>0.5%</em></div><div><span>免下一周工作日</span><em>0.001%</em></div></section>
+    <section class="probability">
+      <div class="section-title"><h2>可能遇见</h2><span>转出的好运</span></div>
+      <div class="probability-list">
+        ${probRow('sage', 1, '免下一个工作日某项任务', '8%')}
+        ${probRow('gold', 2, '免周六努力', '0.5%')}
+        ${probRow('gold', 2, '免下个对应工作日全天', '0.5%')}
+        ${probRow('gold', 3, '免下一周工作日', '0.001%')}
+      </div>
+    </section>
   </main>`;
 }
 
@@ -536,23 +588,26 @@ function performSpin(isBonus = false) {
   pointer?.classList.add('is-spinning');
   if (spinButton) spinButton.disabled = true;
   if (examButton) examButton.disabled = true;
-  if (!wheel?.animate) {
+  const finish = () => {
     wheelOffset = targetOffset;
     wheelResult = result;
+    wheelResultType = prize.type;
     wheelSpinning = false;
     render();
-    return;
-  }
+  };
+  if (!wheel?.animate) { finish(); return; }
+  const finalDeg = -1440 - relativeIndex * 45;
   const animation = wheel.animate(
-    [{ transform: 'rotate(0deg)' }, { transform: `rotate(${-1440 - relativeIndex * 45}deg)` }],
-    { duration: 2800, easing: 'cubic-bezier(.13,.67,.12,1)', fill: 'forwards' }
+    [{ transform: 'rotate(0deg)' }, { transform: `rotate(${finalDeg}deg)` }],
+    { duration: 3000, easing: 'cubic-bezier(.12,.68,.16,1)', fill: 'forwards' }
   );
-  animation.finished.finally(() => {
-    wheelOffset = targetOffset;
-    wheelResult = result;
-    wheelSpinning = false;
-    render();
-  });
+  animation.finished
+    .then(() => wheel.animate(
+      [{ transform: `rotate(${finalDeg}deg)` }, { transform: `rotate(${finalDeg + 1.8}deg)` }, { transform: `rotate(${finalDeg}deg)` }],
+      { duration: 300, easing: 'ease-in-out', fill: 'forwards' }
+    ).finished)
+    .catch(() => {})
+    .then(finish);
 }
 
 function render() {
