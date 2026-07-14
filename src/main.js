@@ -813,6 +813,57 @@ let pageTurnStyles = '';
 let pageTurnDirty = true;
 let pageTurnPrewarmSerial = 0;
 let pageTurnPrewarmTimer = 0;
+const displayMotionProfile = {
+  refreshRate: 60,
+  frameMs: 1000 / 60,
+  releaseFrames: 2,
+  programmaticDuration: 360,
+  flippingTime: 470
+};
+
+function motionProfileForFrameTime(frameMs) {
+  const supportedRates = [60, 75, 90, 120, 144, 165, 240];
+  const measuredRate = 1000 / frameMs;
+  const refreshRate = supportedRates.reduce((nearest, rate) =>
+    Math.abs(rate - measuredRate) < Math.abs(nearest - measuredRate) ? rate : nearest, 60);
+  const normalizedFrameMs = 1000 / refreshRate;
+  return {
+    refreshRate,
+    frameMs: normalizedFrameMs,
+    releaseFrames: refreshRate >= 100 ? 1 : 2,
+    programmaticDuration: Math.max(190, Math.min(360, normalizedFrameMs * 22)),
+    flippingTime: Math.max(240, Math.min(470, normalizedFrameMs * 28))
+  };
+}
+
+function applyDisplayMotionProfile(frameMs) {
+  Object.assign(displayMotionProfile, motionProfileForFrameTime(frameMs));
+  if (pageTurnEngine) pageTurnEngine.pageFlip.getSettings().flippingTime = displayMotionProfile.flippingTime;
+  return displayMotionProfile;
+}
+
+function sampleDisplayRefreshRate() {
+  const samples = [];
+  let previousTime = 0;
+  const sample = time => {
+    if (previousTime) {
+      const delta = time - previousTime;
+      if (delta >= 4 && delta <= 25) samples.push(delta);
+    }
+    previousTime = time;
+    if (samples.length < 14) {
+      requestAnimationFrame(sample);
+      return;
+    }
+    const ordered = [...samples].sort((a, b) => a - b);
+    const median = ordered[Math.floor(ordered.length / 2)];
+    applyDisplayMotionProfile(median);
+  };
+  requestAnimationFrame(sample);
+}
+window.__study.motionProfile = displayMotionProfile;
+window.__study.motionProfileForFrameTime = motionProfileForFrameTime;
+window.__study.applyMotionFrameTime = applyDisplayMotionProfile;
 
 function serializedPageStyles() {
   if (pageTurnStyles) return pageTurnStyles;
@@ -934,7 +985,7 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     size: 'fixed',
     startPage,
     drawShadow: true,
-    flippingTime: 520,
+    flippingTime: displayMotionProfile.flippingTime,
     usePortrait: true,
     autoSize: false,
     maxShadowOpacity: .32,
@@ -997,10 +1048,9 @@ function preparePageTurnEngine(date = selectedDate) {
   const oldPage = document.querySelector('.page');
   if (!oldPage) return null;
   const oldRect = oldPage.getBoundingClientRect();
-  const viewportTop = Math.max(0, oldRect.top);
-  const viewportBottom = Math.min(innerHeight, oldRect.bottom);
-  const turnHeight = Math.max(1, viewportBottom - viewportTop);
-  const contentOffsetY = oldRect.top - viewportTop;
+  const viewportTop = 0;
+  const turnHeight = innerHeight;
+  const contentOffsetY = oldRect.top;
   const built = buildPageTurnPages(date, oldPage, contentOffsetY);
 
   if (!pageTurnEngine) {
@@ -1015,7 +1065,19 @@ function preparePageTurnEngine(date = selectedDate) {
   } else {
     const sameSize = Math.abs(pageTurnEngine.width - oldRect.width) <= 1 &&
       Math.abs(pageTurnEngine.height - turnHeight) <= 1;
-    if (!sameSize) return null;
+    if (!sameSize) {
+      const settings = pageTurnEngine.pageFlip.getSettings();
+      settings.width = Math.round(oldRect.width);
+      settings.height = Math.round(turnHeight);
+      settings.minWidth = settings.maxWidth = settings.width;
+      settings.minHeight = settings.maxHeight = settings.height;
+      pageTurnEngine.width = oldRect.width;
+      pageTurnEngine.height = turnHeight;
+      pageTurnEngine.host.style.width = `${oldRect.width}px`;
+      pageTurnEngine.host.style.height = `${turnHeight}px`;
+      pageTurnEngine.book.style.minWidth = `${settings.width}px`;
+      pageTurnEngine.book.style.minHeight = `${settings.height}px`;
+    }
     pageTurnEngine.host.style.left = `${oldRect.left}px`;
     pageTurnEngine.host.style.top = `${viewportTop}px`;
     pageTurnEngine.pageFlip.getRender().finishAnimation();
@@ -1054,6 +1116,10 @@ function markPageTurnDirty() {
 }
 
 function getPreparedPageTurnEngine() {
+  const pageTop = document.querySelector('.page')?.getBoundingClientRect().top;
+  if (pageTurnEngine && Number.isFinite(pageTop) && Math.abs(pageTurnEngine.contentOffsetY - pageTop) > 1) {
+    pageTurnDirty = true;
+  }
   if (!pageTurnEngine || pageTurnDirty || pageTurnEngine.preparedDate !== dateKey(selectedDate)) {
     return preparePageTurnEngine(selectedDate);
   }
@@ -1125,7 +1191,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     startProgrammatic() {
       fallbackTimer = window.setTimeout(() => { commitLivePage(); cleanup(); }, 1200);
       const startedAt = performance.now();
-      const duration = 360;
+      const duration = displayMotionProfile.programmaticDuration;
       const tick = now => {
         if (settled) return;
         const elapsed = Math.min(1, (now - startedAt) / duration);
@@ -1178,7 +1244,6 @@ function switchDay(direction) {
     finishPageAnimations();
     return;
   }
-  turn?.commitLivePage();
   requestAnimationFrame(() => turn?.startProgrammatic());
 }
 
@@ -1333,7 +1398,14 @@ app.addEventListener('touchend', event => {
   } else if (!gesture.pinch && gesture.turn) {
     const directionalVelocity = gesture.turn.direction > 0 ? -gesture.velocityX : gesture.velocityX;
     const commit = gesture.turn.progress >= .46 || (gesture.turn.progress >= .08 && directionalVelocity > .42);
-    gesture.turn.settle(commit);
+    const turn = gesture.turn;
+    let framesRemaining = displayMotionProfile.releaseFrames;
+    const settleAfterPaint = () => requestAnimationFrame(() => {
+      framesRemaining--;
+      if (framesRemaining > 0) settleAfterPaint();
+      else if (activePageTurn === turn) turn.settle(commit);
+    });
+    settleAfterPaint();
   } else if (!gesture.pinch && currentView === 'day') {
     const touch = event.changedTouches[0];
     const deltaX = touch.clientX - gesture.x;
@@ -1356,6 +1428,14 @@ window.addEventListener('keydown', event => {
 });
 
 window.addEventListener('beforeunload', () => localStorage.setItem(STORE_KEY, JSON.stringify(data)));
-window.addEventListener('resize', () => requestAnimationFrame(autoGrowTextareas));
+window.addEventListener('scroll', () => {
+  pageTurnDirty = true;
+  schedulePageTurnPrewarm(120);
+}, { passive: true });
+window.addEventListener('resize', () => {
+  requestAnimationFrame(autoGrowTextareas);
+  markPageTurnDirty();
+});
 document.fonts?.ready.then(autoGrowTextareas);
 render();
+sampleDisplayRefreshRate();

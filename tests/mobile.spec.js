@@ -179,6 +179,33 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(runningFiniteAnimations).toEqual([]);
 });
 
+test('keeps next-day INP below 150ms with 4x CPU throttling', async ({ page, context }) => {
+  const client = await context.newCDPSession(page);
+  await client.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.addInitScript(() => {
+    window.__interactionDurations = [];
+    new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        if (entry.interactionId) window.__interactionDurations.push(entry.duration);
+      }
+    }).observe({ type: 'event', buffered: true, durationThreshold: 0 });
+  });
+
+  let durations;
+  try {
+    await page.reload();
+    await page.waitForTimeout(500);
+    await page.locator('[data-action="next-day"]').click();
+    await page.waitForTimeout(800);
+    durations = await page.evaluate(() => window.__interactionDurations);
+  } finally {
+    await client.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  }
+
+  expect(durations.length).toBeGreaterThan(0);
+  expect(Math.max(...durations)).toBeLessThan(150);
+});
+
 test('keeps the previous-page animation between different day layouts', async ({ page }) => {
   await page.locator('[data-action="menu"]').click();
   await page.getByRole('button', { name: /月视图/ }).click();
@@ -232,6 +259,112 @@ test('keeps both swipe directions animated from the Saturday layout', async ({ p
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 17');
   await expect(page.locator('.page-turn-host')).toBeHidden();
 });
+
+test('keeps a viewport-sized flip engine across scrolling and the short Saturday page', async ({ page }) => {
+  await page.locator('[data-action="menu"]').click();
+  await page.getByRole('button', { name: /月视图/ }).click();
+  await page.locator('[data-date="2026-07-17"]').click();
+  await page.evaluate(() => scrollTo(0, 220));
+  await page.waitForTimeout(180);
+
+  await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = x => new Touch({ identifier: 41, target, clientX: x, clientY: 520 });
+    const start = touch(340);
+    const move = touch(190);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+  });
+  const engineMetrics = await page.locator('.page-turn-host').evaluate(element => ({
+    height: element.getBoundingClientRect().height,
+    viewport: innerHeight,
+    state: element.dataset.pageTurnState
+  }));
+  expect(Math.abs(engineMetrics.height - engineMetrics.viewport)).toBeLessThanOrEqual(0.5);
+  expect(engineMetrics.state).toBe('user_fold');
+
+  await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const end = new Touch({ identifier: 41, target, clientX: 35, clientY: 520 });
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  });
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 18');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+
+  await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = x => new Touch({ identifier: 42, target, clientX: x, clientY: 360 });
+    const start = touch(340);
+    const move = touch(180);
+    const end = touch(35);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  });
+  await expect(page.locator('.stats-page')).toBeVisible();
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+});
+
+for (const viewport of [
+  { width: 1080, height: 1920 },
+  { width: 1440, height: 3200 },
+  { width: 3840, height: 2160 }
+]) {
+  test(`keeps Saturday turns animated at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.reload();
+
+    const openSaturday = async () => {
+      await page.locator('[data-action="menu"]').click();
+      await page.getByRole('button', { name: /月视图/ }).click();
+      await page.locator('[data-date="2026-07-18"]').click();
+      await expect(page.locator('.date-heading strong')).toHaveText('07 / 18');
+      await page.waitForTimeout(360);
+    };
+    const startSwipe = async (direction, identifier) => page.locator('.page').evaluate((element, { direction, identifier }) => {
+      const target = document.querySelector('#app');
+      const rect = element.getBoundingClientRect();
+      const startX = direction > 0 ? rect.right - 35 : rect.left + 35;
+      const moveX = rect.left + rect.width / 2;
+      const y = Math.min(innerHeight - 80, Math.max(80, rect.top + 360));
+      const touch = x => new Touch({ identifier, target, clientX: x, clientY: y });
+      const start = touch(startX);
+      const move = touch(moveX);
+      target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+      const startedAt = performance.now();
+      target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+      return {
+        moveDuration: performance.now() - startedAt,
+        endX: direction > 0 ? rect.left + 20 : rect.right - 20,
+        y
+      };
+    }, { direction, identifier });
+    const finishSwipe = async ({ endX, y }, identifier) => page.evaluate(({ endX, y, identifier }) => {
+      const target = document.querySelector('#app');
+      const end = new Touch({ identifier, target, clientX: endX, clientY: y });
+      target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+      target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+    }, { endX, y, identifier });
+
+    await openSaturday();
+    const forward = await startSwipe(1, 51);
+    expect(forward.moveDuration).toBeLessThan(20);
+    await expect(page.locator('.page-turn-host')).toHaveAttribute('data-page-turn-state', 'user_fold');
+    await finishSwipe(forward, 51);
+    await expect(page.locator('.stats-page')).toBeVisible();
+    await expect(page.locator('.page-turn-host')).toBeHidden();
+
+    await openSaturday();
+    const backward = await startSwipe(-1, 52);
+    expect(backward.moveDuration).toBeLessThan(20);
+    await expect(page.locator('.page-turn-host')).toHaveAttribute('data-page-turn-state', 'user_fold');
+    await finishSwipe(backward, 52);
+    await expect(page.locator('.date-heading strong')).toHaveText('07 / 17');
+    await expect(page.locator('.page-turn-host')).toBeHidden();
+  });
+}
 
 test('drives StPageFlip from touch distance', async ({ page }) => {
   await page.evaluate(() => {
