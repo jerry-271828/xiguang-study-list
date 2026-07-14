@@ -622,6 +622,7 @@ function render() {
   app.innerHTML = `${content}${toolbar()}<div id="toast" class="toast"></div>`;
   pageMotion = '';
   autoGrowTextareas();
+  markPageTurnDirty();
 }
 
 function finishPageAnimations() {
@@ -807,7 +808,11 @@ function autoGrowTextareas() {
 }
 
 let activePageTurn = null;
+let pageTurnEngine = null;
 let pageTurnStyles = '';
+let pageTurnDirty = true;
+let pageTurnPrewarmSerial = 0;
+let pageTurnPrewarmTimer = 0;
 
 function serializedPageStyles() {
   if (pageTurnStyles) return pageTurnStyles;
@@ -854,15 +859,9 @@ function preparePageTurnSnapshot(snapshot) {
   });
 }
 
-function createPageTurn(oldPage, targetDate, direction, touchY = null) {
-  const oldRect = oldPage.getBoundingClientRect();
-  const oldSnapshot = clonePageSnapshot(oldPage);
-  const targetSnapshot = pageSnapshotForDate(targetDate);
-  if (!targetSnapshot) return null;
-
+function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages, snapshots) {
   const host = document.createElement('div');
   host.className = 'page-turn-host';
-  host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
   host.dataset.pageTurnModel = 'st-page-flip';
   host.setAttribute('aria-hidden', 'true');
   host.inert = true;
@@ -870,11 +869,12 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
     position: 'fixed',
     zIndex: '30',
     left: `${oldRect.left}px`,
-    top: `${oldRect.top}px`,
+    top: `${viewportTop}px`,
     width: `${oldRect.width}px`,
-    height: `${oldRect.height}px`,
+    height: `${turnHeight}px`,
     pointerEvents: 'none',
-    overflow: 'hidden'
+    overflow: 'hidden',
+    visibility: 'hidden'
   });
 
   const shadow = host.attachShadow({ mode: 'closed' });
@@ -886,9 +886,13 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
     .stf__block { position:absolute; width:100%; height:100%; box-sizing:border-box; perspective:2000px; }
     .stf__item { display:none; position:absolute; transform-style:preserve-3d; }
     .stf__outerShadow, .stf__innerShadow, .stf__hardShadow, .stf__hardInnerShadow { position:absolute; left:0; top:0; pointer-events:none; }
+    .page-turn-page { overflow:hidden; background:var(--paper); }
     .page-turn-snapshot.page {
+      position:absolute;
+      top:var(--turn-content-top);
+      left:0;
       width:100%;
-      min-height:100%;
+      min-height:100vh;
       margin:0;
       border-color:rgba(34,38,34,.1);
       box-shadow:none;
@@ -906,16 +910,11 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
   shadow.append(style, book);
   document.body.append(host);
 
-  const pages = direction > 0
-    ? [oldSnapshot, targetSnapshot]
-    : [targetSnapshot, oldSnapshot];
-  pages.forEach(page => page.dataset.density = 'soft');
-
   const pageFlip = new PageFlip(book, {
     width: Math.round(oldRect.width),
-    height: Math.round(oldRect.height),
+    height: Math.round(turnHeight),
     size: 'fixed',
-    startPage: direction > 0 ? 0 : 1,
+    startPage,
     drawShadow: true,
     flippingTime: 520,
     usePortrait: true,
@@ -927,14 +926,133 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
     showPageCorners: false,
     disableFlipByClick: true
   });
+  pageFlip.on('flip', event => {
+    pageTurnEngine?.controller?.onFlip(Number(event.data));
+  });
+  pageFlip.on('changeState', event => {
+    host.dataset.pageTurnState = String(event.data);
+    if (event.data === 'read') pageTurnEngine?.controller?.onRead();
+  });
+  pageFlip.loadFromHTML(pages);
+  snapshots.forEach(preparePageTurnSnapshot);
+  pageFlip.update();
+  return {
+    host,
+    book,
+    pageFlip,
+    width: oldRect.width,
+    height: turnHeight,
+    controller: null,
+    currentIndex: startPage,
+    dateKeys: [],
+    preparedDate: '',
+    contentOffsetY: 0
+  };
+}
 
+function buildPageTurnPages(date, oldPage, contentOffsetY) {
+  const dates = [];
+  const previous = addDays(date, -1);
+  const next = addDays(date, 1);
+  if (inRange(previous)) dates.push(previous);
+  const currentIndex = dates.length;
+  dates.push(new Date(date));
+  if (inRange(next)) dates.push(next);
+
+  const snapshots = dates.map(item => dateKey(item) === dateKey(date)
+    ? clonePageSnapshot(oldPage)
+    : pageSnapshotForDate(item));
+  snapshots.forEach(snapshot => snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`));
+  const pages = snapshots.map(snapshot => {
+    const page = document.createElement('div');
+    page.className = 'page-turn-page';
+    page.dataset.density = 'soft';
+    page.append(snapshot);
+    return page;
+  });
+  return { dates, dateKeys: dates.map(dateKey), currentIndex, snapshots, pages };
+}
+
+function preparePageTurnEngine(date = selectedDate) {
+  if (activePageTurn || currentView !== 'day') return null;
+  const oldPage = document.querySelector('.page');
+  if (!oldPage) return null;
+  const oldRect = oldPage.getBoundingClientRect();
+  const viewportTop = Math.max(0, oldRect.top);
+  const viewportBottom = Math.min(innerHeight, oldRect.bottom);
+  const turnHeight = Math.max(1, viewportBottom - viewportTop);
+  const contentOffsetY = oldRect.top - viewportTop;
+  const built = buildPageTurnPages(date, oldPage, contentOffsetY);
+
+  if (!pageTurnEngine) {
+    pageTurnEngine = createPageTurnEngine(
+      oldRect,
+      viewportTop,
+      turnHeight,
+      built.currentIndex,
+      built.pages,
+      built.snapshots
+    );
+  } else {
+    const sameSize = Math.abs(pageTurnEngine.width - oldRect.width) <= 1 &&
+      Math.abs(pageTurnEngine.height - turnHeight) <= 1;
+    if (!sameSize) return null;
+    pageTurnEngine.host.style.left = `${oldRect.left}px`;
+    pageTurnEngine.host.style.top = `${viewportTop}px`;
+    pageTurnEngine.pageFlip.getRender().finishAnimation();
+    pageTurnEngine.pageFlip.updateFromHtml(built.pages);
+    built.snapshots.forEach(preparePageTurnSnapshot);
+    pageTurnEngine.pageFlip.turnToPage(built.currentIndex);
+    pageTurnEngine.pageFlip.update();
+  }
+
+  pageTurnEngine.host.style.visibility = 'hidden';
+  pageTurnEngine.currentIndex = built.currentIndex;
+  pageTurnEngine.dateKeys = built.dateKeys;
+  pageTurnEngine.preparedDate = dateKey(date);
+  pageTurnEngine.contentOffsetY = contentOffsetY;
+  pageTurnDirty = false;
+  return pageTurnEngine;
+}
+
+function schedulePageTurnPrewarm(delay = 70) {
+  const serial = ++pageTurnPrewarmSerial;
+  clearTimeout(pageTurnPrewarmTimer);
+  if (currentView !== 'day' || activePageTurn) return;
+  pageTurnPrewarmTimer = window.setTimeout(() => {
+    if (serial !== pageTurnPrewarmSerial || currentView !== 'day' || activePageTurn) return;
+    const run = () => {
+      if (serial === pageTurnPrewarmSerial && !activePageTurn) preparePageTurnEngine(selectedDate);
+    };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 240 });
+    else run();
+  }, delay);
+}
+
+function markPageTurnDirty() {
+  pageTurnDirty = true;
+  schedulePageTurnPrewarm();
+}
+
+function getPreparedPageTurnEngine() {
+  if (!pageTurnEngine || pageTurnDirty || pageTurnEngine.preparedDate !== dateKey(selectedDate)) {
+    return preparePageTurnEngine(selectedDate);
+  }
+  return pageTurnEngine;
+}
+
+function createPageTurnController(engine, targetDate, direction, touchY = null) {
+  const targetIndex = engine.currentIndex + direction;
+  if (targetIndex < 0 || targetIndex >= engine.dateKeys.length) return null;
   let progress = 0;
   let settled = false;
   let liveCommitted = false;
   let userTouchStarted = false;
   let lastPoint = null;
   let fallbackTimer = 0;
-  const targetIndex = direction > 0 ? 1 : 0;
+  const viewportTop = Number.parseFloat(engine.host.style.top) || 0;
+  const startY = Math.max(2, Math.min(engine.height - 2, (touchY ?? viewportTop + engine.height * .35) - viewportTop));
+  const startPoint = { x: direction > 0 ? engine.width - 2 : 2, y: startY };
 
   const commitLivePage = () => {
     if (liveCommitted) return;
@@ -949,72 +1067,57 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
     if (settled) return;
     settled = true;
     clearTimeout(fallbackTimer);
-    try { pageFlip.destroy(); } catch {}
-    host.remove();
+    engine.host.style.visibility = 'hidden';
+    engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
+    schedulePageTurnPrewarm(40);
   };
-
-  pageFlip.on('flip', event => {
-    if (event.data === targetIndex) commitLivePage();
-  });
-  pageFlip.on('changeState', event => {
-    host.dataset.pageTurnState = String(event.data);
-    if (event.data === 'read') cleanup();
-  });
-  pageFlip.loadFromHTML(pages);
-  pages.forEach(preparePageTurnSnapshot);
-  pageFlip.update();
-
-  const startY = Math.max(2, Math.min(oldRect.height - 2, (touchY ?? oldRect.top + oldRect.height * .35) - oldRect.top));
-  const startPoint = { x: direction > 0 ? oldRect.width - 2 : 2, y: startY };
 
   const setProgress = value => {
     progress = Math.max(0, Math.min(1, value));
     if (!userTouchStarted) {
-      pageFlip.startUserTouch(startPoint);
-      pageFlip.userMove({ x: direction > 0 ? oldRect.width - 10 : 10, y: startY }, true);
+      engine.pageFlip.startUserTouch(startPoint);
+      engine.pageFlip.userMove({ x: direction > 0 ? engine.width - 10 : 10, y: startY }, true);
       userTouchStarted = true;
     }
     lastPoint = {
-      x: direction > 0
-        ? oldRect.width * (1 - progress * 2)
-        : oldRect.width * progress * 2,
+      x: direction > 0 ? engine.width * (1 - progress * 2) : engine.width * progress * 2,
       y: startY
     };
-    pageFlip.userMove(lastPoint, true);
-    host.dataset.pageTurnProgress = progress.toFixed(3);
+    engine.pageFlip.userMove(lastPoint, true);
+    engine.host.dataset.pageTurnProgress = progress.toFixed(3);
   };
 
   const controller = {
     direction,
     targetDate: new Date(targetDate),
-    host,
+    host: engine.host,
     setProgress,
     get progress() { return progress; },
     commitLivePage,
+    onFlip(index) { if (index === targetIndex) commitLivePage(); },
+    onRead: cleanup,
     startProgrammatic() {
-      fallbackTimer = window.setTimeout(() => {
-        commitLivePage();
-        cleanup();
-      }, 1200);
-      if (direction > 0) pageFlip.flipNext('bottom');
-      else pageFlip.flipPrev('bottom');
+      fallbackTimer = window.setTimeout(() => { commitLivePage(); cleanup(); }, 1200);
+      if (direction > 0) engine.pageFlip.flipNext('bottom');
+      else engine.pageFlip.flipPrev('bottom');
     },
     settle(commit) {
       if (!userTouchStarted) return cleanup();
-      const thresholdProgress = commit ? Math.max(progress, .54) : Math.min(progress, .42);
-      setProgress(thresholdProgress);
-      pageFlip.userStop(lastPoint, false);
-      fallbackTimer = window.setTimeout(() => {
-        if (commit) commitLivePage();
-        cleanup();
-      }, 1200);
+      setProgress(commit ? Math.max(progress, .54) : Math.min(progress, .42));
+      engine.pageFlip.userStop(lastPoint, false);
+      fallbackTimer = window.setTimeout(() => { if (commit) commitLivePage(); cleanup(); }, 1200);
     },
     finishImmediately(commit = progress >= .46) {
+      engine.pageFlip.getRender().finishAnimation();
+      engine.pageFlip.turnToPage(commit ? targetIndex : engine.currentIndex);
       if (commit) commitLivePage();
       cleanup();
     }
   };
+  engine.host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+  engine.host.style.visibility = 'visible';
+  engine.controller = controller;
   activePageTurn = controller;
   return controller;
 }
@@ -1022,9 +1125,9 @@ function createPageTurn(oldPage, targetDate, direction, touchY = null) {
 function beginGesturePageTurn(direction, touchY) {
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null;
   const targetDate = addDays(selectedDate, direction);
-  const oldPage = document.querySelector('.page');
-  if (!oldPage || !inRange(targetDate)) return null;
-  return createPageTurn(oldPage, targetDate, direction, touchY);
+  if (!inRange(targetDate)) return null;
+  const engine = getPreparedPageTurnEngine();
+  return engine ? createPageTurnController(engine, targetDate, direction, touchY) : null;
 }
 
 function switchDay(direction) {
@@ -1039,7 +1142,14 @@ function switchDay(direction) {
     render();
     return;
   }
-  const turn = createPageTurn(oldPage, next, direction);
+  const engine = getPreparedPageTurnEngine();
+  const turn = engine ? createPageTurnController(engine, next, direction) : null;
+  if (!turn) {
+    selectedDate = next;
+    render();
+    finishPageAnimations();
+    return;
+  }
   turn?.commitLivePage();
   requestAnimationFrame(() => turn?.startProgrammatic());
 }
@@ -1051,7 +1161,9 @@ app.addEventListener('click', event => {
   const statusElement = event.target.closest('[data-status-index]');
   if (statusElement) {
     const status = setItemStatus(selectedDate, Number(statusElement.dataset.statusIndex));
-    syncTaskStatus(statusElement, status); return;
+    syncTaskStatus(statusElement, status);
+    markPageTurnDirty();
+    return;
   }
   if (dateElement && !dateElement.disabled) {
     selectedDate = fromKey(dateElement.dataset.date);
@@ -1080,7 +1192,7 @@ app.addEventListener('click', event => {
     const liked = Boolean(data.likes[key]);
     actionElement.classList.toggle('is-liked', liked);
     actionElement.setAttribute('aria-pressed', String(liked));
-    save();
+    save(); markPageTurnDirty();
   }
   if (action === 'return-day') { selectedDate = new Date(statsReturnDate); currentView = previousView; render(); }
   if (action === 'prev-month') { selectedDate = new Date(2026, 6, 13); render(); }
@@ -1102,6 +1214,7 @@ app.addEventListener('input', event => {
     record.items[extraIndex] = { ...record.items[extraIndex], extra: event.target.value };
     save();
     autoGrowLineInput(event.target);
+    markPageTurnDirty();
   }
   if (saturdayIndex !== undefined) {
     const record = dayRecord(selectedDate);
@@ -1115,9 +1228,12 @@ app.addEventListener('input', event => {
       requestAnimationFrame(() => document.querySelector(`[data-saturday-index="${index + 1}"]`)?.focus());
       return;
     }
-    save(); autoGrowTextareas();
+    save(); autoGrowTextareas(); markPageTurnDirty();
   }
-  if (event.target.id === 'journal') { dayRecord(selectedDate).journal = event.target.value; save(); }
+  if (event.target.id === 'journal') {
+    dayRecord(selectedDate).journal = event.target.value;
+    save(); markPageTurnDirty();
+  }
 });
 
 let gesture = null;

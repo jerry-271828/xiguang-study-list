@@ -144,6 +144,7 @@ test('keeps the page canvas anchored during rapid mobile paging', async ({ page 
     expect(Math.abs(frame.width - frame.viewport)).toBeLessThanOrEqual(0.5);
     expect(frame.transform).toBe('none');
   }
+  await expect(page.locator('.page-turn-host')).toHaveCount(1);
 });
 
 test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
@@ -204,7 +205,7 @@ test('drives StPageFlip from touch distance', async ({ page }) => {
   });
 
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 14');
-  await expect(page.locator('[data-page-turn]')).toHaveCount(0);
+  await expect(page.locator('.page-turn-host')).toBeHidden();
 
   await page.evaluate(() => {
     const target = document.querySelector('#app');
@@ -219,6 +220,8 @@ test('drives StPageFlip from touch distance', async ({ page }) => {
   });
 
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 13');
+  await expect(page.locator('.page-turn-host')).toHaveCount(1);
+  await expect(page.locator('.page-turn-host')).toBeHidden();
 });
 
 test('supports repeated touch swipes without moving the page canvas', async ({ page }) => {
