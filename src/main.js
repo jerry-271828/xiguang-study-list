@@ -1,4 +1,5 @@
 import './style.css';
+import { PageFlip } from 'page-flip';
 
 const START = new Date(2026, 6, 13);
 const END = new Date(2026, 7, 29);
@@ -833,10 +834,13 @@ function clonePageSnapshot(source) {
 
 function pageSnapshotForDate(date) {
   const currentDate = selectedDate;
-  selectedDate = new Date(date);
   const template = document.createElement('template');
-  template.innerHTML = dayView().trim();
-  selectedDate = currentDate;
+  try {
+    selectedDate = new Date(date);
+    template.innerHTML = dayView().trim();
+  } finally {
+    selectedDate = currentDate;
+  }
   const snapshot = template.content.firstElementChild;
   snapshot?.classList.add('page-turn-snapshot');
   return snapshot;
@@ -850,19 +854,16 @@ function preparePageTurnSnapshot(snapshot) {
   });
 }
 
-function createPageTurn(oldPage, targetDate, direction) {
+function createPageTurn(oldPage, targetDate, direction, touchY = null) {
   const oldRect = oldPage.getBoundingClientRect();
   const oldSnapshot = clonePageSnapshot(oldPage);
   const targetSnapshot = pageSnapshotForDate(targetDate);
   if (!targetSnapshot) return null;
-  const ghostSnapshot = oldSnapshot.cloneNode(true);
-  ghostSnapshot.classList.add('page-turn-ghost');
 
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
-  host.dataset.pageTurnModel = 'flexible-sheet';
-  host.dataset.pageTurnTranslucent = 'true';
+  host.dataset.pageTurnModel = 'st-page-flip';
   host.setAttribute('aria-hidden', 'true');
   host.inert = true;
   Object.assign(host.style, {
@@ -873,235 +874,115 @@ function createPageTurn(oldPage, targetDate, direction) {
     width: `${oldRect.width}px`,
     height: `${oldRect.height}px`,
     pointerEvents: 'none',
-    overflow: 'visible'
+    overflow: 'hidden'
   });
 
   const shadow = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
   style.textContent = `${serializedPageStyles()}
     :host { display:block; color:var(--ink); font-family:'Urbanist','PingFang SC',sans-serif; }
-    .page-turn-stage { position:absolute; inset:0; perspective:1900px; transform-style:preserve-3d; }
-    .page-turn-base, .page-turn-leaf { position:absolute; inset:0; }
-    .page-turn-base { overflow:hidden; background:var(--paper); }
-    .page-turn-base { z-index:0; }
-    .page-turn-leaf { z-index:2; transform-style:preserve-3d; }
-    .page-turn-segment {
-      position:absolute;
-      top:0;
-      bottom:0;
-      transform-style:preserve-3d;
-      transform-origin:center center;
-      will-change:transform, filter, box-shadow;
-    }
-    .page-turn-face {
-      position:absolute;
-      inset:0;
-      overflow:hidden;
-      background:var(--paper);
-      backface-visibility:hidden;
-      transform-style:preserve-3d;
-    }
-    .page-turn-front { z-index:2; }
-    .page-turn-back {
-      transform:rotateY(180deg);
-      background:var(--paper);
-    }
-    .page-turn-back::before {
-      content:'';
-      position:absolute;
-      z-index:2;
-      inset:0;
-      opacity:.3;
-      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E");
-    }
-    .page-turn-back::after {
-      content:'';
-      position:absolute;
-      z-index:3;
-      inset:0;
-      background:linear-gradient(90deg, rgba(52,47,39,.09), rgba(246,243,235,.6) 13%, rgba(246,243,235,.54) 78%, rgba(255,255,255,.7));
-    }
-    .page-turn-fold-shade {
-      content:'';
-      position:absolute;
-      z-index:30;
-      top:-1%;
-      bottom:-1%;
-      left:0;
-      width:82px;
-      pointer-events:none;
-      opacity:0;
-      background:linear-gradient(90deg, transparent 0%, rgba(52,47,39,.1) 34%, rgba(52,47,39,.2) 47%, rgba(255,255,255,.62) 52%, rgba(52,47,39,.08) 57%, transparent 100%);
-      filter:blur(1.2px);
-      will-change:transform, opacity;
-    }
+    .stf__parent { position:absolute !important; inset:0; display:block; box-sizing:border-box; transform:translateZ(0); touch-action:pan-y; }
+    .stf__wrapper { position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; overflow:hidden; }
+    .stf__block { position:absolute; width:100%; height:100%; box-sizing:border-box; perspective:2000px; }
+    .stf__item { display:none; position:absolute; transform-style:preserve-3d; }
+    .stf__outerShadow, .stf__innerShadow, .stf__hardShadow, .stf__hardInnerShadow { position:absolute; left:0; top:0; pointer-events:none; }
     .page-turn-snapshot.page {
       width:100%;
       min-height:100%;
       margin:0;
-      view-transition-name:none;
       border-color:rgba(34,38,34,.1);
       box-shadow:none;
+      background:var(--paper);
     }
     .page-turn-snapshot.page::before { position:absolute; }
-    .page-turn-segment-copy.page {
-      position:absolute;
-      top:0;
-      left:var(--snapshot-left) !important;
-      width:var(--page-width) !important;
-      max-width:none;
-      min-width:var(--page-width);
-    }
     .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
       animation:none !important;
       transition:none !important;
       caret-color:transparent !important;
     }
-    .page-turn-back-mirror { position:absolute; inset:0; overflow:hidden; transform:scaleX(-1); }
-    .page-turn-ghost {
-      z-index:1;
-      opacity:var(--transmission, .2);
-      filter:grayscale(1) contrast(.92) blur(.4px);
-      mix-blend-mode:multiply;
-    }
   `;
-
-  const stage = document.createElement('div');
-  stage.className = 'page-turn-stage';
-  const leaf = document.createElement('div');
-  leaf.className = `page-turn-leaf ${direction > 0 ? 'next' : 'prev'}`;
-  const foldShade = document.createElement('div');
-  foldShade.className = 'page-turn-fold-shade';
-  const sourceSnapshot = direction > 0 ? oldSnapshot : targetSnapshot;
-  const snapshotsToPrepare = direction > 0 ? [targetSnapshot] : [];
-
-  if (direction > 0) {
-    const base = document.createElement('div');
-    base.className = 'page-turn-base';
-    base.append(targetSnapshot);
-    stage.append(base);
-  }
-
-  const segmentCount = 14;
-  const segmentWidth = oldRect.width / segmentCount;
-  const segments = [];
-  for (let index = 0; index < segmentCount; index++) {
-    const segmentLeft = index * segmentWidth;
-    const visibleWidth = Math.min(segmentWidth + 2, oldRect.width - segmentLeft);
-    const segment = document.createElement('div');
-    segment.className = 'page-turn-segment';
-    segment.style.left = `${segmentLeft}px`;
-    segment.style.width = `${visibleWidth}px`;
-
-    const front = document.createElement('div');
-    front.className = 'page-turn-face page-turn-front';
-    const frontCopy = sourceSnapshot.cloneNode(true);
-    frontCopy.classList.add('page-turn-segment-copy');
-    frontCopy.style.setProperty('--page-width', `${oldRect.width}px`);
-    frontCopy.style.setProperty('--snapshot-left', `${-segmentLeft}px`);
-    front.append(frontCopy);
-
-    const back = document.createElement('div');
-    back.className = 'page-turn-face page-turn-back';
-    const mirror = document.createElement('div');
-    mirror.className = 'page-turn-back-mirror';
-    const backCopy = ghostSnapshot.cloneNode(true);
-    backCopy.classList.add('page-turn-segment-copy');
-    backCopy.style.setProperty('--page-width', `${oldRect.width}px`);
-    backCopy.style.setProperty('--snapshot-left', `${-(oldRect.width - segmentLeft - visibleWidth)}px`);
-    mirror.append(backCopy);
-    back.append(mirror);
-
-    segment.append(front, back);
-    leaf.append(segment);
-    segments.push({ element: segment, center: segmentLeft + visibleWidth / 2 });
-    if (direction < 0) snapshotsToPrepare.push(frontCopy);
-  }
-
-  stage.append(leaf, foldShade);
-  shadow.append(style, stage);
+  const book = document.createElement('div');
+  book.className = 'page-turn-book';
+  shadow.append(style, book);
   document.body.append(host);
-  snapshotsToPrepare.forEach(preparePageTurnSnapshot);
+
+  const pages = direction > 0
+    ? [oldSnapshot, targetSnapshot]
+    : [targetSnapshot, oldSnapshot];
+  pages.forEach(page => page.dataset.density = 'soft');
+
+  const pageFlip = new PageFlip(book, {
+    width: Math.round(oldRect.width),
+    height: Math.round(oldRect.height),
+    size: 'fixed',
+    startPage: direction > 0 ? 0 : 1,
+    drawShadow: true,
+    flippingTime: 520,
+    usePortrait: true,
+    autoSize: false,
+    maxShadowOpacity: .32,
+    showCover: false,
+    mobileScrollSupport: true,
+    useMouseEvents: false,
+    showPageCorners: false,
+    disableFlipByClick: true
+  });
 
   let progress = 0;
-  let animationFrame = 0;
   let settled = false;
-  let settleCommit = null;
   let liveCommitted = false;
+  let userTouchStarted = false;
+  let lastPoint = null;
+  let fallbackTimer = 0;
+  const targetIndex = direction > 0 ? 1 : 0;
 
-  const setProgress = value => {
-    progress = Math.max(0, Math.min(1, value));
-    const phase = Math.sin(Math.PI * progress);
-    const paperProgress = direction > 0 ? progress : 1 - progress;
-    const radius = Math.max(30, Math.min(46, oldRect.width * .115));
-    const curlLength = Math.PI * radius;
-    const foldStart = oldRect.width * (1 - paperProgress) - curlLength * Math.pow(paperProgress, 3);
-
-    segments.forEach(({ element, center }) => {
-      const distance = center - foldStart;
-      let screenX = center;
-      let angle = 0;
-      let depth = 0;
-      let curl = 0;
-      if (distance > 0 && distance < curlLength) {
-        const theta = distance / radius;
-        screenX = foldStart + radius * Math.sin(theta);
-        angle = -theta * 180 / Math.PI;
-        depth = radius * (1 - Math.cos(theta));
-        curl = Math.sin(theta);
-      } else if (distance >= curlLength) {
-        screenX = foldStart - (distance - curlLength);
-        angle = -180;
-        depth = radius * 2;
-      }
-      const offsetX = screenX - center;
-      element.style.transform = `translate3d(${offsetX}px,0,${depth}px) rotateY(${angle}deg)`;
-      element.style.filter = `brightness(${(1 - Math.max(0, curl) * .18).toFixed(3)})`;
-      element.style.boxShadow = 'none';
-      element.style.zIndex = String(10 + Math.round(depth));
-    });
-
-    const visibleFold = Math.max(-82, Math.min(oldRect.width, foldStart + radius));
-    foldShade.style.transform = `translateX(${visibleFold - 41}px)`;
-    foldShade.style.opacity = String(phase * .86);
-    host.style.setProperty('--transmission', String(.12 + phase * .09));
-    host.dataset.pageTurnProgress = progress.toFixed(3);
+  const commitLivePage = () => {
+    if (liveCommitted) return;
+    selectedDate = new Date(targetDate);
+    pageMotion = '';
+    render();
+    finishPageAnimations();
+    liveCommitted = true;
   };
 
   const cleanup = () => {
-    cancelAnimationFrame(animationFrame);
+    if (settled) return;
+    settled = true;
+    clearTimeout(fallbackTimer);
+    try { pageFlip.destroy(); } catch {}
     host.remove();
     if (activePageTurn === controller) activePageTurn = null;
   };
 
-  const finalize = commit => {
-    if (settled) return;
-    settled = true;
-    if (commit && !liveCommitted) {
-      selectedDate = new Date(targetDate);
-      pageMotion = '';
-      render();
-      finishPageAnimations();
-      liveCommitted = true;
-    }
-    cleanup();
-  };
+  pageFlip.on('flip', event => {
+    if (event.data === targetIndex) commitLivePage();
+  });
+  pageFlip.on('changeState', event => {
+    host.dataset.pageTurnState = String(event.data);
+    if (event.data === 'read') cleanup();
+  });
+  pageFlip.loadFromHTML(pages);
+  pages.forEach(preparePageTurnSnapshot);
+  pageFlip.update();
 
-  const animateTo = (target, commit) => {
-    cancelAnimationFrame(animationFrame);
-    settleCommit = commit;
-    const start = progress;
-    const distance = Math.abs(target - start);
-    const duration = 160 + distance * 430;
-    const startedAt = performance.now();
-    const tick = now => {
-      const elapsed = Math.min(1, (now - startedAt) / duration);
-      const eased = 1 - Math.pow(1 - elapsed, 3);
-      setProgress(start + (target - start) * eased);
-      if (elapsed < 1) animationFrame = requestAnimationFrame(tick);
-      else finalize(commit);
+  const startY = Math.max(2, Math.min(oldRect.height - 2, (touchY ?? oldRect.top + oldRect.height * .35) - oldRect.top));
+  const startPoint = { x: direction > 0 ? oldRect.width - 2 : 2, y: startY };
+
+  const setProgress = value => {
+    progress = Math.max(0, Math.min(1, value));
+    if (!userTouchStarted) {
+      pageFlip.startUserTouch(startPoint);
+      pageFlip.userMove({ x: direction > 0 ? oldRect.width - 10 : 10, y: startY }, true);
+      userTouchStarted = true;
+    }
+    lastPoint = {
+      x: direction > 0
+        ? oldRect.width * (1 - progress * 2)
+        : oldRect.width * progress * 2,
+      y: startY
     };
-    animationFrame = requestAnimationFrame(tick);
+    pageFlip.userMove(lastPoint, true);
+    host.dataset.pageTurnProgress = progress.toFixed(3);
   };
 
   const controller = {
@@ -1110,32 +991,40 @@ function createPageTurn(oldPage, targetDate, direction) {
     host,
     setProgress,
     get progress() { return progress; },
-    commitLivePage() {
-      if (liveCommitted) return;
-      selectedDate = new Date(targetDate);
-      pageMotion = '';
-      render();
-      finishPageAnimations();
-      liveCommitted = true;
+    commitLivePage,
+    startProgrammatic() {
+      fallbackTimer = window.setTimeout(() => {
+        commitLivePage();
+        cleanup();
+      }, 1200);
+      if (direction > 0) pageFlip.flipNext('bottom');
+      else pageFlip.flipPrev('bottom');
     },
-    settle(commit) { animateTo(commit ? 1 : 0, commit); },
-    finishImmediately(commit = settleCommit ?? progress >= .46) {
-      cancelAnimationFrame(animationFrame);
-      setProgress(commit ? 1 : 0);
-      finalize(commit);
+    settle(commit) {
+      if (!userTouchStarted) return cleanup();
+      const thresholdProgress = commit ? Math.max(progress, .54) : Math.min(progress, .42);
+      setProgress(thresholdProgress);
+      pageFlip.userStop(lastPoint, false);
+      fallbackTimer = window.setTimeout(() => {
+        if (commit) commitLivePage();
+        cleanup();
+      }, 1200);
+    },
+    finishImmediately(commit = progress >= .46) {
+      if (commit) commitLivePage();
+      cleanup();
     }
   };
   activePageTurn = controller;
-  setProgress(0);
   return controller;
 }
 
-function beginGesturePageTurn(direction) {
+function beginGesturePageTurn(direction, touchY) {
   if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null;
   const targetDate = addDays(selectedDate, direction);
   const oldPage = document.querySelector('.page');
   if (!oldPage || !inRange(targetDate)) return null;
-  return createPageTurn(oldPage, targetDate, direction);
+  return createPageTurn(oldPage, targetDate, direction, touchY);
 }
 
 function switchDay(direction) {
@@ -1152,7 +1041,7 @@ function switchDay(direction) {
   }
   const turn = createPageTurn(oldPage, next, direction);
   turn?.commitLivePage();
-  requestAnimationFrame(() => turn?.settle(true));
+  requestAnimationFrame(() => turn?.startProgrammatic());
 }
 
 app.addEventListener('click', event => {
@@ -1277,7 +1166,7 @@ app.addEventListener('touchmove', event => {
       event.preventDefault();
       if (currentView !== 'day') return;
       if (!gesture.turn && Math.abs(deltaX) > 12) {
-        gesture.turn = beginGesturePageTurn(deltaX < 0 ? 1 : -1);
+        gesture.turn = beginGesturePageTurn(deltaX < 0 ? 1 : -1, gesture.y);
       }
       if (gesture.turn) {
         const travel = gesture.turn.direction > 0 ? -deltaX : deltaX;

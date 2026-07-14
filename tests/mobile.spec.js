@@ -146,7 +146,7 @@ test('keeps the page canvas anchored during rapid mobile paging', async ({ page 
   }
 });
 
-test('turns an isolated paper layer while the live page stays fixed', async ({ page }) => {
+test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   await page.locator('[data-action="next-day"]').click();
 
   const turnState = await page.evaluate(() => {
@@ -157,7 +157,7 @@ test('turns an isolated paper layer while the live page stays fixed', async ({ p
       pointerEvents: element ? getComputedStyle(element).pointerEvents : null
     };
   });
-  expect(turnState).toEqual({ attached: true, model: 'flexible-sheet', pointerEvents: 'none' });
+  expect(turnState).toEqual({ attached: true, model: 'st-page-flip', pointerEvents: 'none' });
 
   const geometry = await page.locator('.page').evaluate(element => {
     const rect = element.getBoundingClientRect();
@@ -178,7 +178,7 @@ test('turns an isolated paper layer while the live page stays fixed', async ({ p
   expect(runningFiniteAnimations).toEqual([]);
 });
 
-test('drives the page angle from touch distance and reveals translucent paper', async ({ page }) => {
+test('drives StPageFlip from touch distance', async ({ page }) => {
   await page.evaluate(() => {
     const target = document.querySelector('#app');
     const touch = (x, y) => new Touch({ identifier: 1, target, clientX: x, clientY: y });
@@ -193,7 +193,7 @@ test('drives the page angle from touch distance and reveals translucent paper', 
   const progress = Number(await turnLayer.getAttribute('data-page-turn-progress'));
   expect(progress).toBeGreaterThan(0.35);
   expect(progress).toBeLessThan(0.5);
-  await expect(turnLayer).toHaveAttribute('data-page-turn-translucent', 'true');
+  await expect(turnLayer).toHaveAttribute('data-page-turn-model', 'st-page-flip');
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 13');
 
   await page.evaluate(() => {
@@ -204,6 +204,21 @@ test('drives the page angle from touch distance and reveals translucent paper', 
   });
 
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 14');
+  await expect(page.locator('[data-page-turn]')).toHaveCount(0);
+
+  await page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = (x, y) => new Touch({ identifier: 2, target, clientX: x, clientY: y });
+    const start = touch(45, 360);
+    const move = touch(245, 362);
+    const end = touch(355, 362);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  });
+
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 13');
 });
 
 test('supports repeated touch swipes without moving the page canvas', async ({ page }) => {
