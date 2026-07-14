@@ -179,6 +179,20 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(runningFiniteAnimations).toEqual([]);
 });
 
+test('keeps the previous-page animation between different day layouts', async ({ page }) => {
+  await page.locator('[data-action="menu"]').click();
+  await page.getByRole('button', { name: /月视图/ }).click();
+  await page.locator('[data-date="2026-07-18"]').click();
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 18');
+
+  await page.locator('[data-action="prev-day"]').click();
+  await page.waitForFunction(() => ['user_fold', 'flipping'].includes(
+    document.querySelector('.page-turn-host')?.dataset.pageTurnState
+  ));
+  await expect(page.locator('.date-heading strong')).toHaveText('07 / 17');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+});
+
 test('drives StPageFlip from touch distance', async ({ page }) => {
   await page.evaluate(() => {
     const target = document.querySelector('#app');

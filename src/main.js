@@ -1050,6 +1050,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   let userTouchStarted = false;
   let lastPoint = null;
   let fallbackTimer = 0;
+  let programmaticFrame = 0;
   const viewportTop = Number.parseFloat(engine.host.style.top) || 0;
   const startY = Math.max(2, Math.min(engine.height - 2, (touchY ?? viewportTop + engine.height * .35) - viewportTop));
   const startPoint = { x: direction > 0 ? engine.width - 2 : 2, y: startY };
@@ -1067,6 +1068,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (settled) return;
     settled = true;
     clearTimeout(fallbackTimer);
+    cancelAnimationFrame(programmaticFrame);
     engine.host.style.visibility = 'hidden';
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
@@ -1099,8 +1101,17 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     onRead: cleanup,
     startProgrammatic() {
       fallbackTimer = window.setTimeout(() => { commitLivePage(); cleanup(); }, 1200);
-      if (direction > 0) engine.pageFlip.flipNext('bottom');
-      else engine.pageFlip.flipPrev('bottom');
+      const startedAt = performance.now();
+      const duration = 360;
+      const tick = now => {
+        if (settled) return;
+        const elapsed = Math.min(1, (now - startedAt) / duration);
+        const eased = 1 - Math.pow(1 - elapsed, 3);
+        setProgress(eased * .82);
+        if (elapsed < 1) programmaticFrame = requestAnimationFrame(tick);
+        else engine.pageFlip.userStop(lastPoint, false);
+      };
+      programmaticFrame = requestAnimationFrame(tick);
     },
     settle(commit) {
       if (!userTouchStarted) return cleanup();
