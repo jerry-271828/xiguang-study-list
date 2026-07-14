@@ -245,9 +245,9 @@ function weekdayItems(date) {
     const extra = record.items[index]?.extra || '';
     let content;
     if (item.editable === 'full') {
-      content = `<span class="line-input-shell full"><textarea class="line-input full" rows="1" data-extra-index="${index}" aria-label="第 ${index + 1} 项内容">${escapeHtml(extra)}</textarea></span>`;
+      content = `<span class="line-input-shell full"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input full" rows="1" data-extra-index="${index}" aria-label="第 ${index + 1} 项内容">${escapeHtml(extra)}</textarea></span>`;
     } else if (item.editable === 'suffix') {
-      content = `<span>${item.text}</span><span class="line-input-shell"><textarea class="line-input" rows="1" data-extra-index="${index}" aria-label="补充第 ${index + 1} 项">${escapeHtml(extra)}</textarea></span>${item.tail ? `<span>${item.tail}</span>` : ''}`;
+      content = `<span>${item.text}</span><span class="line-input-shell"><span class="line-input-rules" aria-hidden="true"></span><textarea class="line-input" rows="1" data-extra-index="${index}" aria-label="补充第 ${index + 1} 项">${escapeHtml(extra)}</textarea></span>${item.tail ? `<span>${item.tail}</span>` : ''}`;
     } else content = `<span>${item.text}</span>`;
     return `<div class="task ${status}" data-task-index="${index}" style="--item-order:${index}">
       <span class="task-number">${index + 1}.</span>
@@ -678,10 +678,13 @@ function changeView(view) {
 }
 
 let lineInputMeasure;
+let lineLayoutMeasure;
+let lineLayoutRange;
 function measuredLineInputWidth(element) {
   if (!lineInputMeasure) {
     lineInputMeasure = document.createElement('span');
     lineInputMeasure.setAttribute('aria-hidden', 'true');
+    lineInputMeasure.dataset.lineInputMeasure = 'width';
     Object.assign(lineInputMeasure.style, {
       position: 'fixed',
       left: '-10000px',
@@ -698,7 +701,71 @@ function measuredLineInputWidth(element) {
   lineInputMeasure.style.paddingLeft = style.paddingLeft;
   lineInputMeasure.style.paddingRight = style.paddingRight;
   lineInputMeasure.textContent = element.value || ' ';
-  return Math.ceil(lineInputMeasure.getBoundingClientRect().width + 2);
+  const width = Math.ceil(lineInputMeasure.getBoundingClientRect().width + 2);
+  lineInputMeasure.textContent = '';
+  return width;
+}
+
+function measuredVisualLineWidths(element, shell, minWidth) {
+  if (!lineLayoutMeasure) {
+    lineLayoutMeasure = document.createElement('div');
+    lineLayoutMeasure.setAttribute('aria-hidden', 'true');
+    lineLayoutMeasure.dataset.lineInputMeasure = 'layout';
+    Object.assign(lineLayoutMeasure.style, {
+      position: 'fixed',
+      left: '-10000px',
+      top: '0',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      margin: '0',
+      padding: '0',
+      border: '0',
+      whiteSpace: 'pre-wrap'
+    });
+    document.body.append(lineLayoutMeasure);
+    lineLayoutRange = document.createRange();
+  }
+  const style = getComputedStyle(element);
+  const paddingX = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+  const paddingY = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 1;
+  Object.assign(lineLayoutMeasure.style, {
+    width: `${Math.max(1, element.clientWidth - paddingX)}px`,
+    font: style.font,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak,
+    direction: style.direction,
+    tabSize: style.tabSize
+  });
+  const value = element.value;
+  lineLayoutMeasure.textContent = value ? `${value}${value.endsWith('\n') ? '\u200b' : ''}` : '\u200b';
+  const measureRect = lineLayoutMeasure.getBoundingClientRect();
+  lineLayoutRange.selectNodeContents(lineLayoutMeasure);
+  const lineCount = Math.max(1, Math.round((element.scrollHeight - paddingY) / lineHeight));
+  const widths = Array(lineCount).fill(0);
+  [...lineLayoutRange.getClientRects()].forEach(rect => {
+    const lineIndex = Math.max(0, Math.min(lineCount - 1, Math.round((rect.top - measureRect.top) / lineHeight)));
+    widths[lineIndex] = Math.max(widths[lineIndex], rect.right - measureRect.left);
+  });
+  const measuredWidths = widths.map(width => Math.min(shell.clientWidth, Math.max(minWidth, Math.ceil(width + paddingX))));
+  lineLayoutMeasure.textContent = '';
+  lineLayoutRange.selectNodeContents(lineLayoutMeasure);
+  return measuredWidths;
+}
+
+function syncLineInputRules(element, shell, minWidth) {
+  const rules = shell.querySelector('.line-input-rules');
+  if (!rules) return;
+  const widths = measuredVisualLineWidths(element, shell, minWidth);
+  while (rules.children.length < widths.length) {
+    const rule = document.createElement('span');
+    rule.className = 'line-input-rule';
+    rules.append(rule);
+  }
+  while (rules.children.length > widths.length) rules.lastElementChild.remove();
+  widths.forEach((width, index) => rules.children[index].style.width = `${width}px`);
 }
 
 function autoGrowLineInput(element) {
@@ -718,6 +785,7 @@ function autoGrowLineInput(element) {
   shell.style.width = `${nextWidth}px`;
   element.style.height = 'auto';
   element.style.height = `${Math.ceil(element.scrollHeight)}px`;
+  syncLineInputRules(element, shell, minWidth);
 }
 
 function autoGrowTextareas() {

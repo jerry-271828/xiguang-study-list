@@ -58,10 +58,24 @@ test('grows editable task lines, wraps with repeated rules, and centers row cont
   expect(shortInput.width).toBeGreaterThan(initialInput.width);
   expect(Math.abs(shortInput.height - initialInput.height)).toBeLessThanOrEqual(1);
 
+  let wrapLength = 1;
+  for (; wrapLength <= 80; wrapLength += 1) {
+    await input.fill('测'.repeat(wrapLength));
+    if (await task.locator('.line-input-rule').count() > 1) break;
+  }
+  expect(wrapLength).toBeLessThanOrEqual(80);
+  const justWrappedWidths = await task.locator('.line-input-rule').evaluateAll(rules => rules.map(rule => rule.getBoundingClientRect().width));
+  expect(justWrappedWidths).toHaveLength(2);
+  expect(justWrappedWidths[1]).toBeLessThan(justWrappedWidths[0] / 2);
+
+  await input.fill('测'.repeat(wrapLength + 4));
+  const grownSecondLineWidths = await task.locator('.line-input-rule').evaluateAll(rules => rules.map(rule => rule.getBoundingClientRect().width));
+  expect(grownSecondLineWidths).toHaveLength(2);
+  expect(grownSecondLineWidths[1]).toBeGreaterThan(justWrappedWidths[1] + 10);
+
   await input.fill('这是一段需要在达到一行上限之后自动换行并继续显示新横线的待办事项内容'.repeat(3));
   const metrics = await task.evaluate(element => {
     const inputElement = element.querySelector('.line-input');
-    const inputShell = element.querySelector('.line-input-shell');
     const content = element.querySelector('.task-content');
     const number = element.querySelector('.task-number');
     const button = element.querySelector('.status-button');
@@ -70,7 +84,6 @@ test('grows editable task lines, wraps with repeated rules, and centers row cont
     const contentRect = content.getBoundingClientRect();
     const numberRect = number.getBoundingClientRect();
     const buttonRect = button.getBoundingClientRect();
-    const ruleStyle = getComputedStyle(inputShell, '::after');
     const taskCenter = taskRect.top + taskRect.height / 2;
     return {
       inputHeight: inputRect.height,
@@ -81,8 +94,7 @@ test('grows editable task lines, wraps with repeated rules, and centers row cont
       taskHeight: taskRect.height,
       numberCenterDelta: Math.abs(numberRect.top + numberRect.height / 2 - taskCenter),
       buttonCenterDelta: Math.abs(buttonRect.top + buttonRect.height / 2 - taskCenter),
-      backgroundImage: ruleStyle.backgroundImage,
-      backgroundRepeat: ruleStyle.backgroundRepeat
+      ruleWidths: [...element.querySelectorAll('.line-input-rule')].map(rule => rule.getBoundingClientRect().width)
     };
   });
 
@@ -92,8 +104,16 @@ test('grows editable task lines, wraps with repeated rules, and centers row cont
   expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
   expect(metrics.numberCenterDelta).toBeLessThanOrEqual(0.5);
   expect(metrics.buttonCenterDelta).toBeLessThanOrEqual(0.5);
-  expect(metrics.backgroundImage).toContain('linear-gradient');
-  expect(metrics.backgroundRepeat).toBe('repeat-y');
+  expect(metrics.ruleWidths.length).toBeGreaterThan(2);
+
+  for (let turn = 0; turn < 6; turn += 1) {
+    await input.fill('短');
+    await input.fill('循环输入用于确认横线节点不会持续累积'.repeat(4));
+  }
+  await input.fill('短');
+  expect(await task.locator('.line-input-rule').count()).toBe(1);
+  expect(await page.locator('[data-line-input-measure]').count()).toBe(2);
+  expect(await page.locator('[data-line-input-measure]').evaluateAll(elements => elements.every(element => element.textContent === ''))).toBe(true);
 });
 
 test('keeps the page canvas anchored during rapid mobile paging', async ({ page }) => {

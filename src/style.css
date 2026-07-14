@@ -75,19 +75,25 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   min-width: 42px;
   max-width: 100%;
 }
-.line-input-shell::after {
-  content: '';
+.line-input-rules {
   position: absolute;
   z-index: 0;
-  top: calc(2px + var(--input-line-step) - 1px);
+  top: 2px;
   right: 0;
   bottom: 2px;
   left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  overflow: hidden;
   pointer-events: none;
-  background-image: linear-gradient(to bottom, var(--input-rule) 0, var(--input-rule) 1px, transparent 1px);
-  background-position: 0 0;
-  background-repeat: repeat-y;
-  background-size: 100% var(--input-line-step);
+}
+.line-input-rule {
+  display: block;
+  flex: 0 0 var(--input-line-step);
+  width: 42px;
+  max-width: 100%;
+  border-bottom: 1px solid var(--input-rule);
 }
 .line-input {
   display: block;
