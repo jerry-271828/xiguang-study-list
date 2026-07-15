@@ -1287,6 +1287,11 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (!userTouchStarted) {
       engine.pageFlip.startUserTouch(startPoint);
       engine.pageFlip.userMove({ x: direction > 0 ? engine.width - 10 : 10, y: startY }, true);
+      // userMove clones the flipping sheet with the full-page styles it had at
+      // rest; the library only clips it in its next rAF drawFrame. Draw now so
+      // the unclipped clone can never reach the screen — on high-DPR phones
+      // that stray frame otherwise paints as a full-screen mirrored flash.
+      try { engine.pageFlip.getRender().drawFrame(); } catch {}
       if (direction > 0) showPageTurnBackside(engine);
       else clearPageTurnBackside(engine);
       engine.host.dataset.pageTurnFace = direction > 0 ? 'back' : 'front';

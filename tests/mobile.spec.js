@@ -293,6 +293,41 @@ test('shows the previous page front when turning backward', async ({ page }) => 
   expect(previousPage.sheetTransform).toContain('rotate(-');
 });
 
+test('clips the flipping sheet before the paper backside is ever styled', async ({ page }) => {
+  await page.addInitScript(() => {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachOpenShadow(init) {
+      return attachShadow.call(this, { ...init, mode: 'open' });
+    };
+  });
+  await page.reload();
+  await page.waitForSelector('.page-turn-host', { state: 'attached' });
+
+  await page.evaluate(() => {
+    window.__backsideStates = [];
+    const book = document.querySelector('.page-turn-host').shadowRoot.querySelector('.page-turn-book');
+    new MutationObserver(records => {
+      for (const record of records) {
+        const element = record.target;
+        if (element.classList?.contains('page-turn-backside')) {
+          window.__backsideStates.push({
+            clip: element.style.clipPath || '',
+            width: element.getBoundingClientRect().width
+          });
+        }
+      }
+    }).observe(book, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  });
+
+  await page.locator('#app [data-action="next-day"]').click();
+  await expect(page.locator('#app .date-heading strong')).toHaveText('07 / 14');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+
+  const states = await page.evaluate(() => window.__backsideStates);
+  expect(states.length).toBeGreaterThan(0);
+  for (const state of states) expect(state.clip).toContain('polygon');
+});
+
 test('keeps the target-page mask painted through the live DOM handoff', async ({ page }) => {
   await page.addInitScript(() => {
     const attachShadow = Element.prototype.attachShadow;
