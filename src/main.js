@@ -809,10 +809,10 @@ function autoGrowTextareas() {
 
 let activePageTurn = null;
 let pageTurnEngine = null;
-let pageTurnStyles = '';
 let pageTurnDirty = true;
 let pageTurnPrewarmSerial = 0;
 let pageTurnPrewarmTimer = 0;
+let pageTurnPrepareSerial = 0;
 const displayMotionProfile = {
   refreshRate: 60,
   frameMs: 1000 / 60,
@@ -864,14 +864,103 @@ function sampleDisplayRefreshRate() {
 window.__study.motionProfile = displayMotionProfile;
 window.__study.motionProfileForFrameTime = motionProfileForFrameTime;
 window.__study.applyMotionFrameTime = applyDisplayMotionProfile;
+window.__study.getPageTurnCanvas = () => pageTurnEngine?.pageFlip?.getUI()?.getCanvas();
+window.__study.getPageTurnEngine = () => pageTurnEngine;
 
-function serializedPageStyles() {
-  if (pageTurnStyles) return pageTurnStyles;
-  pageTurnStyles = Array.from(document.styleSheets).map(sheet => {
-    try { return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n'); }
-    catch { return ''; }
-  }).join('\n');
-  return pageTurnStyles;
+// Rendering an SVG foreignObject through an <img>/Image (needed below to get
+// a bitmap onto a canvas) turned out to be unreliable with this app's full
+// stylesheet: text (CJK and Latin alike) silently failed to render — icons
+// and borders painted fine, but every text node came out blank — once the
+// injected <style> block got large/complex enough. Bisecting confirmed it's
+// not one bad rule (splitting the stylesheet in half still broke text in
+// each half individually once *recombined*); the fix that actually worked
+// end-to-end was shrinking the injected CSS to only what this specific
+// snapshot's markup can match: base/tag selectors (*, body, svg, button...)
+// plus rules whose selector references a class actually present in the
+// snapshot. Also drop @keyframes (frozen snapshots never animate — see
+// preparePageTurnSnapshot's `animation:none!important`) and @import (see
+// font-family override below) since neither can ever be relevant.
+function pageTurnRelevantStyles(snapshot) {
+  const usedClasses = new Set(['page', 'page-turn-static-field', 'is-placeholder']);
+  snapshot.querySelectorAll('*').forEach(element => element.classList.forEach(name => usedClasses.add(name)));
+
+  let css = '';
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = Array.from(sheet.cssRules); }
+    catch { continue; }
+    for (const rule of rules) {
+      if (rule.type === CSSRule.KEYFRAMES_RULE || rule.type === CSSRule.IMPORT_RULE) continue;
+      if (rule.type !== CSSRule.STYLE_RULE) { css += `${rule.cssText}\n`; continue; }
+      const selector = rule.selectorText || '';
+      const matchesUsedClass = selector.includes(':root') || [...usedClasses].some(name => selector.includes(`.${name}`));
+      const isClasslessBaseRule = !selector.includes('.') && !selector.includes('#');
+      if (matchesUsedClass || isClasslessBaseRule) css += `${rule.cssText}\n`;
+    }
+  }
+
+  // :root-scoped custom properties (--paper/--ink/...) don't match inside the
+  // isolated foreignObject content below (it has no <html> element), so
+  // re-declare them on a class we control instead of relying on inheritance
+  // from the real document.
+  const rootBlock = css.match(/:root\s*\{[^}]*\}/);
+  const rootVars = rootBlock ? rootBlock[0].replace(/^:root/, '.page-turn-raster-root') : '';
+  // SVG foreignObject rendered through an <img>/Image is a flattened,
+  // non-reflowing snapshot: any async webfont fetch that hasn't resolved by
+  // the time it's painted never gets a chance to repaint, so text using our
+  // Google-Fonts-loaded families (Urbanist/Noto Serif SC) renders fully
+  // invisible instead of falling back. Force system CJK fonts instead of
+  // trying to inline the real font — the glyph coverage Noto Serif SC needs
+  // alone is 24MB+ across 100+ unicode-range subset files, impractical to
+  // embed per rasterization. Only affects the ~400ms flip overlay; the real
+  // settled page keeps using the webfont as before.
+  return `${css}
+    ${rootVars}
+    .page-turn-raster-root, .page-turn-raster-root * { font-family: 'PingFang SC', 'Heiti SC', 'Microsoft YaHei', sans-serif !important; }
+  `;
+}
+
+function rasterizePageToImage(snapshot, width, canvasHeight, contentOffsetY, scale) {
+  return new Promise((resolve, reject) => {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('xmlns', svgNS);
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(canvasHeight));
+    const foreignObject = document.createElementNS(svgNS, 'foreignObject');
+    foreignObject.setAttribute('width', '100%');
+    foreignObject.setAttribute('height', '100%');
+    svg.append(foreignObject);
+
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+    wrapper.className = 'page-turn-raster-root';
+    wrapper.style.cssText = `position:relative; width:${width}px; height:${canvasHeight}px; background:var(--paper); overflow:hidden;`;
+    const styleEl = document.createElement('style');
+    styleEl.textContent = pageTurnRelevantStyles(snapshot);
+    snapshot.style.position = 'absolute';
+    snapshot.style.top = `${contentOffsetY}px`;
+    snapshot.style.left = '0';
+    snapshot.style.margin = '0';
+    wrapper.append(styleEl, snapshot);
+    foreignObject.append(wrapper);
+
+    const svgString = new XMLSerializer().serializeToString(svg);
+    const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgString)))}`;
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(canvasHeight * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, width, canvasHeight);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('page-turn rasterization failed'));
+    img.src = dataUrl;
+  });
 }
 
 function namespaceSnapshotIds(snapshot, namespace) {
@@ -964,51 +1053,25 @@ function preparePageTurnSnapshot(snapshot, pageWidth) {
   }
 }
 
-function syncPageTurnMask(mask, book, pageDate) {
-  const sourcePage = [...book.querySelectorAll('.page-turn-page')]
-    .find(page => page.dataset.pageTurnDate === pageDate);
-  const sourceSnapshot = sourcePage?.querySelector('.page-turn-snapshot');
-  if (!sourceSnapshot) return false;
-  const maskSnapshot = sourceSnapshot.cloneNode(true);
-  maskSnapshot.classList.add('page-turn-mask-snapshot');
-  maskSnapshot.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
-  maskSnapshot.querySelectorAll('[for], [aria-controls], [aria-labelledby], [aria-describedby]')
-    .forEach(element => {
-      element.removeAttribute('for');
-      element.removeAttribute('aria-controls');
-      element.removeAttribute('aria-labelledby');
-      element.removeAttribute('aria-describedby');
-    });
-  mask.replaceChildren(maskSnapshot);
-  mask.dataset.pageTurnDate = pageDate;
-  return true;
+const pageTurnDpr = Math.min(window.devicePixelRatio || 1, 3.5);
+
+// page-flip's CanvasUI sizes the canvas backing store to the CSS pixel rect
+// (canvas.width = parseInt(computedStyle.width)), not devicePixelRatio — on
+// a high-DPR phone that's a blurry canvas. Re-fix the backing store to the
+// real pixel resolution and rescale the context after every call that goes
+// through CanvasUI.update()/resizeCanvas() internally (load/update/resize),
+// since setting canvas.width/height resets both the pixel buffer and the
+// context's transform matrix.
+function fixPageTurnCanvasDpr(pageFlip) {
+  const canvas = pageFlip.getUI().getCanvas();
+  const cssWidth = parseInt(getComputedStyle(canvas).width, 10);
+  const cssHeight = parseInt(getComputedStyle(canvas).height, 10);
+  canvas.width = Math.round(cssWidth * pageTurnDpr);
+  canvas.height = Math.round(cssHeight * pageTurnDpr);
+  canvas.getContext('2d').scale(pageTurnDpr, pageTurnDpr);
 }
 
-function clearPageTurnBackside(engine) {
-  engine.book.querySelectorAll('.page-turn-backside').forEach(page => page.classList.remove('page-turn-backside'));
-}
-
-function clearPageTurnTarget(engine) {
-  engine.book.querySelectorAll('.page-turn-target').forEach(page => page.classList.remove('page-turn-target'));
-}
-
-function showPageTurnTarget(engine, targetDate) {
-  clearPageTurnTarget(engine);
-  const target = [...engine.book.querySelectorAll('.page-turn-page')]
-    .find(page => page.dataset.pageTurnDate === dateKey(targetDate));
-  target?.classList.add('page-turn-target');
-}
-
-function showPageTurnBackside(engine) {
-  clearPageTurnBackside(engine);
-  const sheetDate = engine.dateKeys[engine.currentIndex];
-  const matchingPages = [...engine.book.querySelectorAll('.page-turn-page')]
-    .filter(page => page.dataset.pageTurnDate === sheetDate);
-  const backside = matchingPages.at(-1);
-  backside?.classList.add('page-turn-backside');
-}
-
-function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages) {
+function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, hrefs) {
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurnModel = 'st-page-flip';
@@ -1028,60 +1091,15 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
 
   const shadow = host.attachShadow({ mode: 'closed' });
   const style = document.createElement('style');
-  style.textContent = `${serializedPageStyles()}
-    :host { display:block; color:var(--ink); background:var(--paper); font-family:'Urbanist','PingFang SC',sans-serif; }
-    .page-turn-mask { position:absolute; z-index:0; inset:0; overflow:hidden; background:var(--paper); contain:paint; pointer-events:none; }
-    .page-turn-book { z-index:1; }
+  style.textContent = `
+    :host { display:block; background:var(--paper); }
     .stf__parent { position:absolute !important; inset:0; display:block; box-sizing:border-box; transform:translateZ(0); touch-action:pan-y; }
     .stf__wrapper { position:absolute; inset:0; width:100%; height:100%; box-sizing:border-box; overflow:hidden; }
-    .stf__block { position:absolute; width:100%; height:100%; box-sizing:border-box; perspective:2000px; }
-    .stf__item { display:none; position:absolute; transform-style:preserve-3d; }
-    .stf__outerShadow, .stf__innerShadow, .stf__hardShadow, .stf__hardInnerShadow { position:absolute; left:0; top:0; pointer-events:none; }
-    .page-turn-page { overflow:hidden; background:var(--paper); }
-    .page-turn-page.page-turn-target {
-      z-index:6 !important;
-      isolation:isolate;
-      backface-visibility:hidden;
-      -webkit-backface-visibility:hidden;
-    }
-    .page-turn-page.page-turn-backside {
-      background:
-        linear-gradient(90deg, rgba(70,68,61,.035), transparent 14%, transparent 86%, rgba(70,68,61,.025)),
-        var(--paper);
-    }
-    .page-turn-snapshot.page {
-      position:absolute;
-      top:var(--turn-content-top);
-      left:0;
-      width:100%;
-      min-height:100vh;
-      margin:0;
-      border-color:rgba(34,38,34,.1);
-      box-shadow:none;
-      background:var(--paper);
-    }
-    .page-turn-backside .page-turn-snapshot.page {
-      transform:scaleX(-1);
-      transform-origin:50% 50%;
-      background:transparent;
-    }
-    .page-turn-backside .page-turn-snapshot.page::before { opacity:.17; }
-    .page-turn-backside .page-turn-snapshot.page > * {
-      opacity:.24;
-      filter:grayscale(.82) sepia(.08) saturate(.28) contrast(.7);
-    }
-    .page-turn-snapshot.page::before { position:absolute; }
-    .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
-      animation:none !important;
-      transition:none !important;
-      caret-color:transparent !important;
-    }
+    .stf__parent canvas { position:absolute; width:100%; height:100%; left:0; top:0; }
   `;
-  const mask = document.createElement('div');
-  mask.className = 'page-turn-mask';
   const book = document.createElement('div');
   book.className = 'page-turn-book';
-  shadow.append(style, mask, book);
+  shadow.append(style, book);
   document.body.append(host);
 
   const pageFlip = new PageFlip(book, {
@@ -1108,12 +1126,19 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     host.dataset.pageTurnState = state;
     pageTurnEngine?.controller?.onState(state);
   });
-  pageFlip.loadFromHTML(pages);
+  // loadFromImages() internally schedules a setTimeout(1) "safari fix" that
+  // calls ui.update() -> resizeCanvas(), which would reset the backing store
+  // back to 1x and wipe our DPR fix below if we only fixed it synchronously
+  // here. The library fires 'init' right after that timeout's update() runs,
+  // so re-apply the fix there too — host stays hidden the whole time so
+  // there's nothing to see regardless of which of these actually lands last.
+  pageFlip.on('init', () => fixPageTurnCanvasDpr(pageFlip));
+  pageFlip.loadFromImages(hrefs);
+  fixPageTurnCanvasDpr(pageFlip);
   pageFlip.update();
-  syncPageTurnMask(mask, book, pages[startPage].dataset.pageTurnDate);
+  fixPageTurnCanvasDpr(pageFlip);
   return {
     host,
-    mask,
     book,
     pageFlip,
     width: oldRect.width,
@@ -1126,7 +1151,7 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
   };
 }
 
-function buildPageTurnPages(date, oldPage, contentOffsetY) {
+async function buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight) {
   const dates = [];
   const previous = addDays(date, -1);
   const next = addDays(date, 1);
@@ -1139,22 +1164,24 @@ function buildPageTurnPages(date, oldPage, contentOffsetY) {
     ? clonePageSnapshot(oldPage, dateKey(item))
     : pageSnapshotForDate(item));
   const pageWidth = oldPage.getBoundingClientRect().width;
-  snapshots.forEach(snapshot => {
-    snapshot.style.setProperty('--turn-content-top', `${contentOffsetY}px`);
-    preparePageTurnSnapshot(snapshot, pageWidth);
-  });
-  const pages = snapshots.map((snapshot, index) => {
-    const page = document.createElement('div');
-    page.className = 'page-turn-page';
-    page.dataset.density = 'soft';
-    page.dataset.pageTurnDate = dateKey(dates[index]);
-    page.append(snapshot);
-    return page;
-  });
-  return { dates, dateKeys: dates.map(dateKey), currentIndex, pages };
+  snapshots.forEach(snapshot => preparePageTurnSnapshot(snapshot, pageWidth));
+  // Rasterizing each page is a real chunk of synchronous CPU work (CSS
+  // filtering, SVG serialization, base64 encoding) before its async image
+  // decode even starts. Doing all of them back-to-back via Promise.all
+  // blocks the main thread for their combined synchronous cost in one go,
+  // which is long enough to noticeably delay a real touch event if a
+  // gesture starts while this (idle-scheduled) prewarm is running. Yield
+  // to the event loop between pages so pending input gets a chance to be
+  // handled in between instead of queuing behind all of them.
+  const hrefs = [];
+  for (const snapshot of snapshots) {
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    hrefs.push(await rasterizePageToImage(snapshot, pageWidth, turnHeight, contentOffsetY, pageTurnDpr));
+  }
+  return { dates, dateKeys: dates.map(dateKey), currentIndex, hrefs };
 }
 
-function preparePageTurnEngine(date = selectedDate) {
+async function preparePageTurnEngine(date = selectedDate) {
   if (activePageTurn || currentView !== 'day') return null;
   const oldPage = document.querySelector('.page');
   if (!oldPage) return null;
@@ -1162,7 +1189,12 @@ function preparePageTurnEngine(date = selectedDate) {
   const viewportTop = 0;
   const turnHeight = innerHeight;
   const contentOffsetY = oldRect.top;
-  const built = buildPageTurnPages(date, oldPage, contentOffsetY);
+  const serial = ++pageTurnPrepareSerial;
+  const built = await buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight);
+  // Rasterization is async (awaits Image decode); if a newer prepare call,
+  // an active page turn, or a view change started while we were waiting,
+  // this result is stale — drop it instead of clobbering current state.
+  if (serial !== pageTurnPrepareSerial || activePageTurn || currentView !== 'day') return null;
 
   if (!pageTurnEngine) {
     pageTurnEngine = createPageTurnEngine(
@@ -1170,7 +1202,7 @@ function preparePageTurnEngine(date = selectedDate) {
       viewportTop,
       turnHeight,
       built.currentIndex,
-      built.pages
+      built.hrefs
     );
   } else {
     const sameSize = Math.abs(pageTurnEngine.width - oldRect.width) <= 1 &&
@@ -1191,16 +1223,11 @@ function preparePageTurnEngine(date = selectedDate) {
     pageTurnEngine.host.style.left = `${oldRect.left}px`;
     pageTurnEngine.host.style.top = `${viewportTop}px`;
     pageTurnEngine.pageFlip.getRender().finishAnimation();
-    pageTurnEngine.pageFlip.updateFromHtml(built.pages);
+    pageTurnEngine.pageFlip.updateFromImages(built.hrefs);
     pageTurnEngine.pageFlip.turnToPage(built.currentIndex);
     pageTurnEngine.pageFlip.update();
+    fixPageTurnCanvasDpr(pageTurnEngine.pageFlip);
   }
-
-  syncPageTurnMask(
-    pageTurnEngine.mask,
-    pageTurnEngine.book,
-    built.dateKeys[built.currentIndex]
-  );
 
   pageTurnEngine.host.style.visibility = 'hidden';
   pageTurnEngine.currentIndex = built.currentIndex;
@@ -1218,7 +1245,7 @@ function schedulePageTurnPrewarm(delay = 70) {
   pageTurnPrewarmTimer = window.setTimeout(() => {
     if (serial !== pageTurnPrewarmSerial || currentView !== 'day' || activePageTurn) return;
     const run = () => {
-      if (serial === pageTurnPrewarmSerial && !activePageTurn) preparePageTurnEngine(selectedDate);
+      if (serial === pageTurnPrewarmSerial && !activePageTurn) preparePageTurnEngine(selectedDate).catch(() => {});
     };
     if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 240 });
     else run();
@@ -1236,7 +1263,20 @@ function getPreparedPageTurnEngine() {
     pageTurnDirty = true;
   }
   if (!pageTurnEngine || pageTurnDirty || pageTurnEngine.preparedDate !== dateKey(selectedDate)) {
-    return preparePageTurnEngine(selectedDate);
+    // Rasterizing pages is inherently async (awaits Image decode), so it
+    // can't be forced synchronous here the way the old DOM-clone snapshot
+    // pipeline could. Kick off a rebuild in the background and return null;
+    // callers already fall back to an un-animated date change when no
+    // engine is available, so this one interaction just skips the flip
+    // visual instead of blocking on it — the engine will be ready by the
+    // next turn. setTimeout (not a bare async call) matters here: calling
+    // an async function still runs its synchronous prefix inline before
+    // its first await, and buildPageTurnImages()'s SVG serialization +
+    // base64 encoding is real synchronous CPU work — without the
+    // setTimeout it ran inline on this gesture-start call stack anyway,
+    // defeating the whole point of not awaiting it.
+    window.setTimeout(() => preparePageTurnEngine(selectedDate).catch(() => {}), 0);
+    return null;
   }
   return pageTurnEngine;
 }
@@ -1246,9 +1286,6 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   if (targetIndex < 0 || targetIndex >= engine.dateKeys.length) return null;
   const activeField = document.activeElement;
   if (activeField?.matches?.('input, textarea, select, [contenteditable="true"]')) activeField.blur();
-  clearPageTurnBackside(engine);
-  if (direction > 0) showPageTurnTarget(engine, targetDate);
-  else clearPageTurnTarget(engine);
   let progress = 0;
   let settled = false;
   let liveCommitted = false;
@@ -1265,7 +1302,6 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
 
   const commitLivePage = () => {
     if (liveCommitted) return;
-    syncPageTurnMask(engine.mask, engine.book, dateKey(targetDate));
     selectedDate = new Date(targetDate);
     pageMotion = '';
     render();
@@ -1277,8 +1313,6 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (settled) return;
     settled = true;
     cancelAnimationFrame(cleanupFrame);
-    clearPageTurnBackside(engine);
-    clearPageTurnTarget(engine);
     engine.host.style.visibility = 'hidden';
     document.body.classList.remove('page-turn-active');
     engine.controller = null;
@@ -1313,8 +1347,6 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
       // the unclipped clone can never reach the screen — on high-DPR phones
       // that stray frame otherwise paints as a full-screen mirrored flash.
       try { engine.pageFlip.getRender().drawFrame(); } catch {}
-      if (direction > 0) showPageTurnBackside(engine);
-      else clearPageTurnBackside(engine);
       engine.host.dataset.pageTurnFace = direction > 0 ? 'back' : 'front';
       userTouchStarted = true;
     }
