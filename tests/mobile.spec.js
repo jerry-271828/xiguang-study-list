@@ -211,6 +211,48 @@ test('preserves the live typography roles in page-turn snapshots', async ({ page
   );
 });
 
+test('keeps responsive quote size in page-turn rasters', async ({ page }) => {
+  await page.setViewportSize({ width: 780, height: 452 });
+  await page.reload();
+  await page.waitForFunction(() => window.__study.isPageTurnReady());
+
+  const metrics = await page.evaluate(() => {
+    const quoteText = document.querySelector('#app > .page .quote > span:nth-child(2)');
+    const range = document.createRange();
+    range.selectNodeContents(quoteText);
+    const liveRect = range.getBoundingClientRect();
+    const engine = window.__study.getPageTurnEngine();
+    const image = engine.pageFlip.getPageCollection().getPage(engine.currentIndex).image;
+    const canvas = document.createElement('canvas');
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0, innerWidth, innerHeight);
+
+    const startX = Math.floor(liveRect.left);
+    const startY = Math.floor(liveRect.top);
+    const width = Math.ceil(liveRect.right) - startX;
+    const height = Math.ceil(liveRect.bottom) - startY;
+    const pixels = context.getImageData(startX, startY, width, height).data;
+    let firstInkX = width;
+    let lastInkX = -1;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      if (pixels[offset] + pixels[offset + 1] + pixels[offset + 2] >= 360) continue;
+      const pixelX = (offset / 4) % width;
+      firstInkX = Math.min(firstInkX, pixelX);
+      lastInkX = Math.max(lastInkX, pixelX);
+    }
+    return {
+      liveFontSize: getComputedStyle(quoteText).fontSize,
+      liveWidth: liveRect.width,
+      rasterInkWidth: lastInkX - firstInkX + 1
+    };
+  });
+
+  expect(metrics.liveFontSize).toBe('17px');
+  expect(metrics.rasterInkWidth / metrics.liveWidth).toBeGreaterThan(.9);
+});
+
 test('draws mirrored muted content on the paper backside', async ({ page }) => {
   await page.waitForFunction(() => {
     const engine = window.__study.getPageTurnEngine();

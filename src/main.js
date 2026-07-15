@@ -1115,6 +1115,8 @@ function preparePageTurnSnapshot(snapshot, pageWidth) {
   document.body.append(measureHost);
   measureHost.append(snapshot);
   try {
+    const responsiveType = snapshot.querySelector('.quote');
+    if (responsiveType) responsiveType.style.fontSize = getComputedStyle(responsiveType).fontSize;
     snapshot.querySelectorAll('.line-input').forEach(autoGrowLineInput);
     snapshot.querySelectorAll('.saturday-task textarea').forEach(element => {
       element.style.height = 'auto';
