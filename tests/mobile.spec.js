@@ -188,7 +188,7 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(runningFiniteAnimations).toEqual([]);
 });
 
-test('mirrors and mutes the paper backside without raster filters or native fields', async ({ page }) => {
+test('mirrors and mutes the paper backside without native fields', async ({ page }) => {
   await page.addInitScript(() => {
     const attachShadow = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function attachOpenShadow(init) {
@@ -215,7 +215,6 @@ test('mirrors and mutes the paper backside without raster filters or native fiel
     const backside = root.querySelector('.page-turn-backside');
     const snapshot = backside.querySelector('.page-turn-snapshot');
     const content = snapshot.querySelector('.task-list');
-    const paperTexture = getComputedStyle(snapshot, '::before');
     const maskedJournal = root.querySelector('.page-turn-mask .journal .page-turn-static-field');
     return {
       activeElement: document.activeElement?.tagName,
@@ -228,9 +227,7 @@ test('mirrors and mutes the paper backside without raster filters or native fiel
       journalText: maskedJournal.textContent,
       transform: getComputedStyle(snapshot).transform,
       opacity: Number(getComputedStyle(content).opacity),
-      filter: getComputedStyle(content).filter,
-      paperTextureContent: paperTexture.content,
-      paperTextureImage: paperTexture.backgroundImage
+      filter: getComputedStyle(content).filter
     };
   });
 
@@ -244,9 +241,7 @@ test('mirrors and mutes the paper backside without raster filters or native fiel
   expect(paper.journalText).toBe('今日留下的光……');
   expect(paper.transform).toBe('matrix(-1, 0, 0, 1, 0, 0)');
   expect(paper.opacity).toBeLessThan(0.3);
-  expect(paper.filter).toBe('none');
-  expect(paper.paperTextureContent).toBe('none');
-  expect(paper.paperTextureImage).toBe('none');
+  expect(paper.filter).not.toBe('none');
 });
 
 test('shows the previous page front when turning backward', async ({ page }) => {

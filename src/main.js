@@ -1048,16 +1048,12 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
       transform-origin:50% 50%;
       background:transparent;
     }
+    .page-turn-backside .page-turn-snapshot.page::before { opacity:.17; }
     .page-turn-backside .page-turn-snapshot.page > * {
       opacity:.24;
-      filter:none !important;
+      filter:grayscale(.82) sepia(.08) saturate(.28) contrast(.7);
     }
-    .page-turn-snapshot.page::before {
-      content:none !important;
-      display:none !important;
-      background-image:none !important;
-      filter:none !important;
-    }
+    .page-turn-snapshot.page::before { position:absolute; }
     .page-turn-snapshot *, .page-turn-snapshot *::before, .page-turn-snapshot *::after {
       animation:none !important;
       transition:none !important;
