@@ -328,6 +328,42 @@ test('clips the flipping sheet before the paper backside is ever styled', async 
   for (const state of states) expect(state.clip).toContain('polygon');
 });
 
+test('keeps the revealed next page above every outgoing-page layer', async ({ page }) => {
+  await page.addInitScript(() => {
+    const attachShadow = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function attachOpenShadow(init) {
+      return attachShadow.call(this, { ...init, mode: 'open' });
+    };
+  });
+  await page.reload();
+
+  await page.locator('#app [data-action="next-day"]').click();
+  const frames = await page.evaluate(async () => {
+    const samples = [];
+    for (let frame = 0; frame < 12; frame += 1) {
+      await new Promise(requestAnimationFrame);
+      const root = document.querySelector('.page-turn-host')?.shadowRoot;
+      const target = root?.querySelector('.page-turn-target');
+      const outgoing = [...(root?.querySelectorAll('.page-turn-page[data-page-turn-date="2026-07-13"]') || [])];
+      if (!target || !outgoing.length) continue;
+      samples.push({
+        targetDate: target.dataset.pageTurnDate,
+        targetText: target.querySelector('.date-heading strong')?.textContent,
+        targetZ: Number(getComputedStyle(target).zIndex),
+        outgoingZ: Math.max(...outgoing.map(element => Number(getComputedStyle(element).zIndex) || 0))
+      });
+    }
+    return samples;
+  });
+
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.every(frame => frame.targetDate === '2026-07-14')).toBe(true);
+  expect(frames.every(frame => frame.targetText === '07 / 14')).toBe(true);
+  expect(frames.every(frame => frame.targetZ > frame.outgoingZ)).toBe(true);
+  await expect(page.locator('#app .date-heading strong')).toHaveText('07 / 14');
+  await expect(page.locator('.page-turn-host')).toBeHidden();
+});
+
 test('keeps the target-page mask painted through the live DOM handoff', async ({ page }) => {
   await page.addInitScript(() => {
     const attachShadow = Element.prototype.attachShadow;

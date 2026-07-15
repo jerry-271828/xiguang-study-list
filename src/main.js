@@ -988,6 +988,17 @@ function clearPageTurnBackside(engine) {
   engine.book.querySelectorAll('.page-turn-backside').forEach(page => page.classList.remove('page-turn-backside'));
 }
 
+function clearPageTurnTarget(engine) {
+  engine.book.querySelectorAll('.page-turn-target').forEach(page => page.classList.remove('page-turn-target'));
+}
+
+function showPageTurnTarget(engine, targetDate) {
+  clearPageTurnTarget(engine);
+  const target = [...engine.book.querySelectorAll('.page-turn-page')]
+    .find(page => page.dataset.pageTurnDate === dateKey(targetDate));
+  target?.classList.add('page-turn-target');
+}
+
 function showPageTurnBackside(engine) {
   clearPageTurnBackside(engine);
   const sheetDate = engine.dateKeys[engine.currentIndex];
@@ -1027,6 +1038,12 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, pages
     .stf__item { display:none; position:absolute; transform-style:preserve-3d; }
     .stf__outerShadow, .stf__innerShadow, .stf__hardShadow, .stf__hardInnerShadow { position:absolute; left:0; top:0; pointer-events:none; }
     .page-turn-page { overflow:hidden; background:var(--paper); }
+    .page-turn-page.page-turn-target {
+      z-index:6 !important;
+      isolation:isolate;
+      backface-visibility:hidden;
+      -webkit-backface-visibility:hidden;
+    }
     .page-turn-page.page-turn-backside {
       background:
         linear-gradient(90deg, rgba(70,68,61,.035), transparent 14%, transparent 86%, rgba(70,68,61,.025)),
@@ -1230,6 +1247,8 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   const activeField = document.activeElement;
   if (activeField?.matches?.('input, textarea, select, [contenteditable="true"]')) activeField.blur();
   clearPageTurnBackside(engine);
+  if (direction > 0) showPageTurnTarget(engine, targetDate);
+  else clearPageTurnTarget(engine);
   let progress = 0;
   let settled = false;
   let liveCommitted = false;
@@ -1259,6 +1278,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     settled = true;
     cancelAnimationFrame(cleanupFrame);
     clearPageTurnBackside(engine);
+    clearPageTurnTarget(engine);
     engine.host.style.visibility = 'hidden';
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
