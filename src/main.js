@@ -1168,6 +1168,12 @@ function fixPageTurnCanvasDpr(pageFlip) {
   canvas.getContext('2d').scale(pageTurnDpr, pageTurnDpr);
 }
 
+function hidePageTurnSpineShadow(pageFlip) {
+  const render = pageFlip.getRender();
+  render.drawBookShadow = () => {};
+  render.pageTurnSpineShadowHidden = true;
+}
+
 function installPageTurnBacksides(pageFlip) {
   const context = pageFlip.getRender().getContext();
   const paperColor = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim() || '#f6f3eb';
@@ -1283,6 +1289,7 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, hrefs
   // there's nothing to see regardless of which of these actually lands last.
   pageFlip.on('init', () => fixPageTurnCanvasDpr(pageFlip));
   pageFlip.loadFromImages(hrefs);
+  hidePageTurnSpineShadow(pageFlip);
   installPageTurnBacksides(pageFlip);
   fixPageTurnCanvasDpr(pageFlip);
   pageFlip.update();

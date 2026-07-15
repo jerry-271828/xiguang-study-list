@@ -248,6 +248,21 @@ test('draws mirrored muted content on the paper backside', async ({ page }) => {
   expect(drewBackside).toBe(true);
 });
 
+test('hides the fixed spine shadow at the left viewport edge', async ({ page }) => {
+  await page.waitForFunction(() => window.__study.isPageTurnReady());
+  const render = await page.evaluate(() => {
+    const engine = window.__study.getPageTurnEngine();
+    const pageRender = engine.pageFlip.getRender();
+    return {
+      spineShadowHidden: pageRender.pageTurnSpineShadowHidden,
+      drawBookShadowSource: String(pageRender.drawBookShadow)
+    };
+  });
+
+  expect(render.spineShadowHidden).toBe(true);
+  expect(render.drawBookShadowSource).toContain('=> {}');
+});
+
 // The old HTML-mode tests for clip-path transitions, z-index ordering and
 // mask handoff remain obsolete: Canvas mode has no corresponding DOM layers.
 
