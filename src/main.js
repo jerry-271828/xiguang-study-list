@@ -984,6 +984,22 @@ function syncPageTurnMask(mask, book, pageDate) {
   return true;
 }
 
+function resetPageTurnCompositing(host) {
+  // Force the browser to tear down and rebuild every GPU compositing layer
+  // under `host` before the reused page-turn engine is shown again. Setting
+  // display:none and forcing a synchronous layout read drops the layout
+  // boxes (and therefore any compositing layers built on them) immediately,
+  // unlike a plain repaint which the browser can service by reusing a
+  // layer's existing raster tiles. Restoring display mints brand-new,
+  // never-rasterized layers, so no tile can carry over pixels from the page
+  // content updateFromHtml() just replaced. Only call this while `host` is
+  // already hidden (see preparePageTurnEngine) so nothing flashes.
+  const previousDisplay = host.style.display;
+  host.style.display = 'none';
+  void host.offsetHeight;
+  host.style.display = previousDisplay;
+}
+
 function clearPageTurnBackside(engine) {
   engine.book.querySelectorAll('.page-turn-backside').forEach(page => page.classList.remove('page-turn-backside'));
 }
@@ -1193,6 +1209,7 @@ function preparePageTurnEngine(date = selectedDate) {
     pageTurnEngine.pageFlip.getRender().finishAnimation();
     pageTurnEngine.pageFlip.updateFromHtml(built.pages);
     pageTurnEngine.pageFlip.turnToPage(built.currentIndex);
+    resetPageTurnCompositing(pageTurnEngine.host);
     pageTurnEngine.pageFlip.update();
   }
 
