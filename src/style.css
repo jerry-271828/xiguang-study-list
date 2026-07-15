@@ -36,6 +36,7 @@ button { border: 0; background: none; cursor: pointer; }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 #app { min-height: 100vh; overflow-x: hidden; overflow-x: clip; overscroll-behavior-x: none; touch-action: pan-y; }
 .page { width: min(100%, 780px); min-height: 100vh; margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 22px calc(42px + env(safe-area-inset-bottom)); position: relative; isolation: isolate; background: var(--paper); }
+body.page-turn-active .page { visibility: hidden; }
 .page::before { content: ''; position: fixed; inset: 0; pointer-events: none; opacity: .42; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.025'/%3E%3C/svg%3E"); }
 .topbar { height: 42px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .icon-button { width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; transition: .25s ease; }

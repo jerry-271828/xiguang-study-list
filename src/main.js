@@ -1297,6 +1297,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     clearPageTurnBackside(engine);
     clearPageTurnTarget(engine);
     engine.host.style.visibility = 'hidden';
+    document.body.classList.remove('page-turn-active');
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
     schedulePageTurnPrewarm(40);
@@ -1377,6 +1378,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   };
   engine.host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
   engine.host.style.visibility = 'visible';
+  document.body.classList.add('page-turn-active');
   engine.controller = controller;
   activePageTurn = controller;
   return controller;
