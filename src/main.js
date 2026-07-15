@@ -574,6 +574,7 @@ function performSpin(isBonus = false) {
   const result = applyPrize(prize);
   record.results.push({ ...prize, result, at: Date.now() });
   save();
+  markPageTurnDirty(); // prizes exempt tasks/days: their cached page rasters are stale
   const candidateIndices = prize.type === 'none' ? [0, 2, 4]
     : prize.type === 'task' ? [1, 3]
     : prize.type === 'saturday' ? [5]
@@ -622,7 +623,7 @@ function render() {
   app.innerHTML = `${content}${toolbar()}<div id="toast" class="toast"></div>`;
   pageMotion = '';
   autoGrowTextareas();
-  markPageTurnDirty();
+  invalidatePageTurnEngine();
 }
 
 function finishPageAnimations() {
@@ -812,7 +813,10 @@ let pageTurnEngine = null;
 let pageTurnDirty = true;
 let pageTurnPrewarmSerial = 0;
 let pageTurnPrewarmTimer = 0;
-let pageTurnPrepareSerial = 0;
+let pageTurnPrepareActive = false;
+let pageTurnPrepareQueued = false;
+let pageTurnContentEpoch = 0;
+const pageTurnImageCache = { signature: '', epoch: -1, hrefs: new Map() };
 const displayMotionProfile = {
   refreshRate: 60,
   frameMs: 1000 / 60,
@@ -878,9 +882,10 @@ window.__study.getPageTurnEngine = () => pageTurnEngine;
 // snapshot's markup can match: base/tag selectors (*, body, svg, button...)
 // plus rules whose selector references a class actually present in the
 // snapshot. Also drop @keyframes (frozen snapshots never animate — see
-// preparePageTurnSnapshot's `animation:none!important`) and @import (see
-// font-family override below) since neither can ever be relevant.
-function pageTurnRelevantStyles(snapshot) {
+// preparePageTurnSnapshot's `animation:none!important`) and @import (the
+// raster embeds the exact glyph subset it needs instead) since neither can
+// ever be relevant.
+function pageTurnRelevantStyles(snapshot, embeddedFontCss = '') {
   const usedClasses = new Set(['page', 'page-turn-static-field', 'is-placeholder']);
   snapshot.querySelectorAll('*').forEach(element => element.classList.forEach(name => usedClasses.add(name)));
 
@@ -905,22 +910,82 @@ function pageTurnRelevantStyles(snapshot) {
   // from the real document.
   const rootBlock = css.match(/:root\s*\{[^}]*\}/);
   const rootVars = rootBlock ? rootBlock[0].replace(/^:root/, '.page-turn-raster-root') : '';
-  // SVG foreignObject rendered through an <img>/Image is a flattened,
-  // non-reflowing snapshot: any async webfont fetch that hasn't resolved by
-  // the time it's painted never gets a chance to repaint, so text using our
-  // Google-Fonts-loaded families (Urbanist/Noto Serif SC) renders fully
-  // invisible instead of falling back. Force system CJK fonts instead of
-  // trying to inline the real font — the glyph coverage Noto Serif SC needs
-  // alone is 24MB+ across 100+ unicode-range subset files, impractical to
-  // embed per rasterization. Only affects the ~400ms flip overlay; the real
-  // settled page keeps using the webfont as before.
-  return `${css}
+  // The font-face rules passed here contain only the unique glyphs used by
+  // the prepared pages, with their WOFF2 files embedded as data URLs. That
+  // keeps the canvas snapshot on the same Noto Serif SC / Urbanist faces as
+  // the live DOM without shipping the full 24MB+ CJK family. If the subset
+  // is still loading (or the network is unavailable), the original
+  // role-specific CSS stacks remain intact, so serif copy falls back to a
+  // serif face instead of every element being flattened to PingFang SC.
+  return `${embeddedFontCss}
+    ${css}
     ${rootVars}
-    .page-turn-raster-root, .page-turn-raster-root * { font-family: 'PingFang SC', 'Heiti SC', 'Microsoft YaHei', sans-serif !important; }
   `;
 }
 
-function rasterizePageToImage(snapshot, width, canvasHeight, contentOffsetY, scale) {
+const pageTurnStaticFontText = `
+  ${QUOTES.join('')}${WEEKDAYS.join('')}${SUBJECTS.join('')}
+  ${workItems(new Date(2026, 6, 13)).flatMap(item => [item.text, item.tail]).join('')}
+  ${workItems(new Date(2026, 6, 14)).flatMap(item => [item.text, item.tail]).join('')}
+  隙光盛夏清单收起展开工具栏日视图周视图月视图本周统计总统计赠语收藏摸鱼转盘
+  轻触复制已完成未完成标记完成上一天下一天星期自由书写循序而行今日总目标
+  日结日记今日留下的光自动保存本周小结周统计计划字数日记字数计划项进行中
+  把一周的细小光亮轻轻收拢未完成分布按学科返回日清单第项内容补充收藏赠语
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz /·，。、“”！？：；（）—-+%…
+`;
+const pageTurnFontCharacters = [...new Set(Array.from(pageTurnStaticFontText))].sort().join('');
+let pageTurnEmbeddedFontCss = '';
+let pageTurnEmbeddedFontKey = '';
+let pageTurnEmbeddedFontPending = false;
+
+function dataUrlForBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('font data URL conversion failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function embeddedPageTurnFontCss(characters) {
+  const endpoint = new URL('https://fonts.googleapis.com/css2');
+  endpoint.searchParams.append('family', 'Noto Serif SC:wght@400;500;600');
+  endpoint.searchParams.append('family', 'Urbanist:wght@400;500;600');
+  endpoint.searchParams.set('display', 'block');
+  endpoint.searchParams.set('text', characters);
+
+  const cssResponse = await fetch(endpoint, { mode: 'cors', cache: 'force-cache' });
+  if (!cssResponse.ok) throw new Error(`page-turn font CSS failed: ${cssResponse.status}`);
+  const css = await cssResponse.text();
+  const fontUrls = [...new Set([...css.matchAll(/url\((['"]?)(https:\/\/[^)'"\s]+)\1\)/g)].map(match => match[2]))];
+  const embeddedUrls = new Map(await Promise.all(fontUrls.map(async url => {
+    const response = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+    if (!response.ok) throw new Error(`page-turn font failed: ${response.status}`);
+    return [url, await dataUrlForBlob(await response.blob())];
+  })));
+  return css.replace(/url\((['"]?)(https:\/\/[^)'"\s]+)\1\)/g, (match, quote, url) =>
+    embeddedUrls.has(url) ? `url("${embeddedUrls.get(url)}")` : match);
+}
+
+function refreshPageTurnEmbeddedFonts() {
+  if (pageTurnFontCharacters === pageTurnEmbeddedFontKey || pageTurnEmbeddedFontPending) return;
+
+  pageTurnEmbeddedFontPending = true;
+  embeddedPageTurnFontCss(pageTurnFontCharacters).then(css => {
+    pageTurnEmbeddedFontPending = false;
+    if (!css) return;
+    pageTurnEmbeddedFontCss = css;
+    pageTurnEmbeddedFontKey = pageTurnFontCharacters;
+    // Keep the already-prepared fallback engine usable while an idle rebuild
+    // swaps in the exact font subset; typography refinement should never make
+    // a user's next gesture lose its animation.
+    schedulePageTurnPrewarm(40);
+  }).catch(() => {
+    pageTurnEmbeddedFontPending = false;
+  });
+}
+
+function rasterizePageToImage(snapshot, width, canvasHeight, contentOffsetY, scale, embeddedFontCss = '') {
   return new Promise((resolve, reject) => {
     const svgNS = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(svgNS, 'svg');
@@ -937,7 +1002,7 @@ function rasterizePageToImage(snapshot, width, canvasHeight, contentOffsetY, sca
     wrapper.className = 'page-turn-raster-root';
     wrapper.style.cssText = `position:relative; width:${width}px; height:${canvasHeight}px; background:var(--paper); overflow:hidden;`;
     const styleEl = document.createElement('style');
-    styleEl.textContent = pageTurnRelevantStyles(snapshot);
+    styleEl.textContent = pageTurnRelevantStyles(snapshot, embeddedFontCss);
     snapshot.style.position = 'absolute';
     snapshot.style.top = `${contentOffsetY}px`;
     snapshot.style.left = '0';
@@ -994,6 +1059,18 @@ function clonePageSnapshot(source, namespace = 'current') {
   });
   return namespaceSnapshotIds(snapshot, namespace);
 }
+
+window.__study.getPageTurnFontState = () => {
+  const source = document.querySelector('.page');
+  const snapshot = source ? clonePageSnapshot(source, 'font-state') : null;
+  const rasterStyles = snapshot ? pageTurnRelevantStyles(snapshot) : '';
+  return {
+    mode: pageTurnEmbeddedFontCss ? 'embedded-webfonts' : 'role-preserving-fallback',
+    forcesUniversalFont: /\.page-turn-raster-root\s*,\s*\.page-turn-raster-root\s+\*\s*\{[^}]*font-family/i.test(rasterStyles),
+    serifStack: getComputedStyle(document.documentElement).getPropertyValue('--font-serif').trim(),
+    sansStack: getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim()
+  };
+};
 
 function pageSnapshotForDate(date) {
   const currentDate = selectedDate;
@@ -1160,28 +1237,71 @@ async function buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight) {
   dates.push(new Date(date));
   if (inRange(next)) dates.push(next);
 
-  const snapshots = dates.map(item => dateKey(item) === dateKey(date)
-    ? clonePageSnapshot(oldPage, dateKey(item))
-    : pageSnapshotForDate(item));
   const pageWidth = oldPage.getBoundingClientRect().width;
-  snapshots.forEach(snapshot => preparePageTurnSnapshot(snapshot, pageWidth));
-  // Rasterizing each page is a real chunk of synchronous CPU work (CSS
-  // filtering, SVG serialization, base64 encoding) before its async image
-  // decode even starts. Doing all of them back-to-back via Promise.all
-  // blocks the main thread for their combined synchronous cost in one go,
-  // which is long enough to noticeably delay a real touch event if a
-  // gesture starts while this (idle-scheduled) prewarm is running. Yield
-  // to the event loop between pages so pending input gets a chance to be
-  // handled in between instead of queuing behind all of them.
-  const hrefs = [];
-  for (const snapshot of snapshots) {
-    await new Promise(resolve => window.setTimeout(resolve, 0));
-    hrefs.push(await rasterizePageToImage(snapshot, pageWidth, turnHeight, contentOffsetY, pageTurnDpr));
+  const embeddedFontCss = pageTurnEmbeddedFontCss;
+  // Per-date rasters are keyed by everything baked into the bitmap: page
+  // size, scroll offset and font mode (the signature) plus the content
+  // epoch. Consecutive flips share two of their three pages with the
+  // previous build, so cache hits turn the post-flip rebuild into a single
+  // new rasterization instead of three — cheap enough to finish between two
+  // quick successive swipes.
+  const signature = `${Math.round(pageWidth)}x${Math.round(turnHeight)}@${Math.round(contentOffsetY)}:${embeddedFontCss ? 'webfont' : 'fallback'}`;
+  if (pageTurnImageCache.signature !== signature || pageTurnImageCache.epoch !== pageTurnContentEpoch) {
+    pageTurnImageCache.signature = signature;
+    pageTurnImageCache.epoch = pageTurnContentEpoch;
+    pageTurnImageCache.hrefs.clear();
   }
-  return { dates, dateKeys: dates.map(dateKey), currentIndex, hrefs };
+  const hrefs = [];
+  for (const item of dates) {
+    const key = dateKey(item);
+    let href = pageTurnImageCache.hrefs.get(key);
+    if (href) {
+      pageTurnImageCache.hrefs.delete(key); // re-insert below: keep Map in recency order
+    } else {
+      // Rasterizing a page is a real chunk of synchronous CPU work (CSS
+      // filtering, SVG serialization, base64 encoding) before its async
+      // image decode even starts. Yield to the event loop before each one
+      // so pending input gets handled in between instead of queuing behind
+      // the whole batch.
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      const snapshot = key === dateKey(date) ? clonePageSnapshot(oldPage, key) : pageSnapshotForDate(item);
+      preparePageTurnSnapshot(snapshot, pageWidth);
+      href = await rasterizePageToImage(snapshot, pageWidth, turnHeight, contentOffsetY, pageTurnDpr, embeddedFontCss);
+    }
+    pageTurnImageCache.hrefs.set(key, href);
+    while (pageTurnImageCache.hrefs.size > 8) {
+      pageTurnImageCache.hrefs.delete(pageTurnImageCache.hrefs.keys().next().value);
+    }
+    hrefs.push(href);
+  }
+  // Start font subsetting only after the immediately usable fallback images
+  // are finished, so the extra network work cannot delay the first gesture.
+  // Only built-in interface copy is sent to the Google Fonts endpoint.
+  // Journal and task content stay local; custom glyphs use the matching
+  // serif/sans fallback stack in the turn snapshot.
+  refreshPageTurnEmbeddedFonts();
+  return {
+    dates,
+    dateKeys: dates.map(dateKey),
+    currentIndex,
+    hrefs,
+    fontMode: embeddedFontCss ? 'embedded-webfonts' : 'role-preserving-fallback'
+  };
 }
 
 async function preparePageTurnEngine(date = selectedDate) {
+  // Run exactly one build at a time. Overlapping prepares can only
+  // invalidate each other, and each is several full-page rasterizations of
+  // synchronous CPU work — a burst of quick flips used to stack dozens of
+  // concurrent builds that starved the main thread and discarded each
+  // other's results, so no build ever won, the engine stayed stale for
+  // a minute plus, and every turn silently fell back to the un-animated
+  // path. A request that arrives while a build is running collapses into
+  // one trailing rerun (in the finally below) from the then-current state.
+  if (pageTurnPrepareActive) {
+    pageTurnPrepareQueued = true;
+    return null;
+  }
   if (activePageTurn || currentView !== 'day') return null;
   const oldPage = document.querySelector('.page');
   if (!oldPage) return null;
@@ -1189,13 +1309,29 @@ async function preparePageTurnEngine(date = selectedDate) {
   const viewportTop = 0;
   const turnHeight = innerHeight;
   const contentOffsetY = oldRect.top;
-  const serial = ++pageTurnPrepareSerial;
-  const built = await buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight);
-  // Rasterization is async (awaits Image decode); if a newer prepare call,
-  // an active page turn, or a view change started while we were waiting,
-  // this result is stale — drop it instead of clobbering current state.
-  if (serial !== pageTurnPrepareSerial || activePageTurn || currentView !== 'day') return null;
+  const epoch = pageTurnContentEpoch;
+  pageTurnPrepareActive = true;
+  try {
+    const built = await buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight);
+    // Rasterization is async (awaits Image decode); if the world moved on
+    // while it ran — a turn started, the view changed, the selected date
+    // moved, or the page content itself changed — this result is stale.
+    // Drop it and let the trailing rerun rebuild from the current state.
+    if (activePageTurn || currentView !== 'day' || dateKey(date) !== dateKey(selectedDate) || epoch !== pageTurnContentEpoch) {
+      pageTurnPrepareQueued = true;
+      return null;
+    }
+    return applyPreparedPageTurnImages(built, oldRect, viewportTop, turnHeight, contentOffsetY, date);
+  } finally {
+    pageTurnPrepareActive = false;
+    if (pageTurnPrepareQueued) {
+      pageTurnPrepareQueued = false;
+      schedulePageTurnPrewarm(30);
+    }
+  }
+}
 
+function applyPreparedPageTurnImages(built, oldRect, viewportTop, turnHeight, contentOffsetY, date) {
   if (!pageTurnEngine) {
     pageTurnEngine = createPageTurnEngine(
       oldRect,
@@ -1230,6 +1366,7 @@ async function preparePageTurnEngine(date = selectedDate) {
   }
 
   pageTurnEngine.host.style.visibility = 'hidden';
+  pageTurnEngine.host.dataset.pageTurnFontMode = built.fontMode;
   pageTurnEngine.currentIndex = built.currentIndex;
   pageTurnEngine.dateKeys = built.dateKeys;
   pageTurnEngine.preparedDate = dateKey(date);
@@ -1252,9 +1389,22 @@ function schedulePageTurnPrewarm(delay = 70) {
   }, delay);
 }
 
+// Page content actually changed (task status, like, typed input, layout
+// size): both the prepared engine and the cached per-date rasters are stale.
 function markPageTurnDirty() {
+  pageTurnContentEpoch++;
   pageTurnDirty = true;
   schedulePageTurnPrewarm();
+}
+
+// The prepared engine no longer matches the live page (regenerated DOM after
+// render(), moved scroll offset) but the content each raster was built from
+// is intact — rebuild the engine while letting the raster cache do its job.
+// Anything the rasters do bake in (size, offset, font mode) is covered by the
+// cache signature check in buildPageTurnImages, not by this.
+function invalidatePageTurnEngine(delay) {
+  pageTurnDirty = true;
+  schedulePageTurnPrewarm(delay);
 }
 
 function getPreparedPageTurnEngine() {
@@ -1451,7 +1601,7 @@ app.addEventListener('click', event => {
     const removeLike = event.target.closest('[data-like-date]');
     if (copyFavorite) copyText(quoteFor(fromKey(copyFavorite.dataset.copyDate)));
     if (removeLike) {
-      delete data.likes[removeLike.dataset.likeDate]; delete data.likeTimes[removeLike.dataset.likeDate]; save(); render();
+      delete data.likes[removeLike.dataset.likeDate]; delete data.likeTimes[removeLike.dataset.likeDate]; save(); markPageTurnDirty(); render();
     }
     return;
   }
@@ -1500,7 +1650,7 @@ app.addEventListener('input', event => {
       const parts = event.target.value.split('\n');
       record.saturday[index] = parts.shift();
       record.saturday.push(parts.join('\n'));
-      save(); render();
+      save(); markPageTurnDirty(); render();
       requestAnimationFrame(() => document.querySelector(`[data-saturday-index="${index + 1}"]`)?.focus());
       return;
     }
@@ -1612,8 +1762,7 @@ window.addEventListener('keydown', event => {
 
 window.addEventListener('beforeunload', () => localStorage.setItem(STORE_KEY, JSON.stringify(data)));
 window.addEventListener('scroll', () => {
-  pageTurnDirty = true;
-  schedulePageTurnPrewarm(120);
+  invalidatePageTurnEngine(120);
 }, { passive: true });
 window.addEventListener('resize', () => {
   requestAnimationFrame(autoGrowTextareas);

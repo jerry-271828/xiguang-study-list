@@ -188,6 +188,20 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(runningFiniteAnimations).toEqual([]);
 });
 
+test('preserves the live typography roles in page-turn snapshots', async ({ page }) => {
+  const fontState = await page.evaluate(() => window.__study.getPageTurnFontState());
+
+  expect(fontState.forcesUniversalFont).toBe(false);
+  expect(fontState.serifStack).toContain('Noto Serif SC');
+  expect(fontState.sansStack).toContain('Urbanist');
+
+  await page.waitForTimeout(500);
+  await expect(page.locator('.page-turn-host')).toHaveAttribute(
+    'data-page-turn-font-mode',
+    /^(role-preserving-fallback|embedded-webfonts)$/
+  );
+});
+
 // The following 5 tests (backside mirror/grayscale styling, per-page
 // clip-path transitions, .page-turn-target z-index ordering, and the
 // .page-turn-mask DOM handoff) tested internal DOM/CSS mechanics specific to
@@ -488,6 +502,62 @@ test('supports repeated touch swipes without moving the page canvas', async ({ p
     expect(Math.abs(canvas.width - canvas.viewport)).toBeLessThanOrEqual(0.5);
     expect(canvas.transform).toBe('none');
   }
+});
+
+test('recovers the flip animation after a burst of rapid swipes', async ({ page, context }) => {
+  // Regression: each flip rebuild is a multi-page rasterization, and rebuild
+  // requests used to run concurrently and invalidate each other — a few fast
+  // swipes stacked enough overlapping builds that none ever won, the engine
+  // stayed stale permanently, and every later swipe silently used the
+  // un-animated fallback. Individual swipes in the burst may legitimately
+  // fall back while a rebuild is in flight; what must never happen is the
+  // engine failing to recover once given breathing room. CPU throttling
+  // widens the build/gesture race the same way a loaded phone does — without
+  // it the 2x-DPR test rasters finish fast enough to drain the old storm
+  // within this test's patience, hiding the regression.
+  const client = await context.newCDPSession(page);
+  await client.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  const swipe = () => page.evaluate(() => {
+    const target = document.querySelector('#app');
+    const touch = (x, y) => new Touch({ identifier: 1, target, clientX: x, clientY: y });
+    const start = touch(340, 360);
+    const move = touch(200, 362);
+    const end = touch(35, 362);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [end], targetTouches: [end], changedTouches: [end] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
+  });
+
+  let animated = false;
+  try {
+    await page.waitForTimeout(1200); // initial async prewarm (throttled)
+    for (let turn = 0; turn < 6; turn += 1) {
+      await swipe();
+      await page.waitForTimeout(250);
+    }
+
+    // body.page-turn-active only appears on animated turns, never on the
+    // fallback path. Allow a few attempts so a slow shared-CI rebuild can
+    // finish; before the fix no amount of waiting ever animated again.
+    for (let attempt = 0; attempt < 3 && !animated; attempt += 1) {
+      await page.waitForTimeout(1500);
+      const sawTurn = page.evaluate(() => new Promise(resolve => {
+        const deadline = performance.now() + 2500;
+        const poll = () => {
+          if (document.body.classList.contains('page-turn-active')) return resolve(true);
+          if (performance.now() > deadline) return resolve(false);
+          requestAnimationFrame(poll);
+        };
+        poll();
+      }));
+      await swipe();
+      animated = await sawTurn;
+    }
+  } finally {
+    await client.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  }
+  expect(animated).toBe(true);
 });
 
 test('claims horizontal swipes before browser navigation but preserves vertical scrolling', async ({ page }) => {
