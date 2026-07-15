@@ -133,7 +133,7 @@ test('keeps the page canvas anchored during rapid mobile paging', async ({ page 
       const frames = [];
       for (let frame = 0; frame < 4; frame += 1) {
         await new Promise(requestAnimationFrame);
-        const pageElement = document.querySelector('.page');
+        const pageElement = document.querySelector('#app > .page');
         const rect = pageElement.getBoundingClientRect();
         frames.push({
           left: rect.left,
@@ -169,7 +169,7 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   });
   expect(turnState).toEqual({ attached: true, model: 'st-page-flip', pointerEvents: 'none' });
 
-  const geometry = await page.locator('.page').evaluate(element => {
+  const geometry = await page.locator('#app > .page').evaluate(element => {
     const rect = element.getBoundingClientRect();
     return {
       left: rect.left,
@@ -182,7 +182,7 @@ test('uses StPageFlip while the live page stays fixed', async ({ page }) => {
   expect(Math.abs(geometry.right - geometry.viewport)).toBeLessThanOrEqual(0.5);
   expect(geometry.transform).toBe('none');
   await expect(page.locator('.date-heading strong')).toHaveText('07 / 14');
-  const runningFiniteAnimations = await page.locator('.page').evaluate(element => element.getAnimations({ subtree: true })
+  const runningFiniteAnimations = await page.locator('#app > .page').evaluate(element => element.getAnimations({ subtree: true })
     .filter(animation => animation.effect.getTiming().iterations !== Infinity && animation.playState === 'running')
     .map(animation => animation.animationName));
   expect(runningFiniteAnimations).toEqual([]);
@@ -194,6 +194,15 @@ test('preserves the live typography roles in page-turn snapshots', async ({ page
   expect(fontState.forcesUniversalFont).toBe(false);
   expect(fontState.serifStack).toContain('Noto Serif SC');
   expect(fontState.sansStack).toContain('Urbanist');
+  const fontFamilies = value => value.split(',').map(family => family.trim().replace(/^['"]|['"]$/g, ''));
+  expect(fontFamilies(fontState.dateFamily)).toEqual(fontFamilies(fontState.numericStack));
+  expect(fontState.dateFamily).not.toContain('Urbanist');
+
+  const numericRoles = await page.locator('#app > .page').evaluate(element => {
+    const selectors = ['.date-heading strong', '.task-number', '.task-content'];
+    return selectors.map(selector => getComputedStyle(element.querySelector(selector)).fontFamily);
+  });
+  expect(numericRoles.every(family => fontFamilies(family)[0] === 'Xiguang Numerals')).toBe(true);
 
   await page.waitForTimeout(500);
   await expect(page.locator('.page-turn-host')).toHaveAttribute(
@@ -202,19 +211,45 @@ test('preserves the live typography roles in page-turn snapshots', async ({ page
   );
 });
 
-// The following 5 tests (backside mirror/grayscale styling, per-page
-// clip-path transitions, .page-turn-target z-index ordering, and the
-// .page-turn-mask DOM handoff) tested internal DOM/CSS mechanics specific to
-// the old HTML-mode page-flip rendering: a separate DOM node per page with
-// per-frame clip-path/transform, a hand-styled mirrored "backside" element,
-// and a mask element bridging the live-DOM handoff. None of that DOM exists
-// anymore — the flip overlay is now a single <canvas> that page-flip draws
-// pre-rasterized page bitmaps onto (see CLAUDE.md's "翻页局部内容串页问题"
-// doc for why), so there is nothing left for these tests to assert against.
-// The backside mirror/grayscale effect specifically was not reimplemented
-// for Canvas mode (page-flip has no built-in concept of a page's "back"
-// image; it would need a second pre-rendered bitmap variant per page) —
-// left as a follow-up, not a regression introduced silently.
+test('draws mirrored muted content on the paper backside', async ({ page }) => {
+  await page.waitForFunction(() => {
+    const engine = window.__study.getPageTurnEngine();
+    const current = engine?.pageFlip.getPageCollection().getPage(engine.currentIndex);
+    return current?.image?.complete && current?.pageTurnBacksideStyle;
+  });
+
+  const faces = await page.evaluate(() => {
+    const engine = window.__study.getPageTurnEngine();
+    const current = engine.pageFlip.getPageCollection().getPage(engine.currentIndex);
+    return {
+      mirrored: current.pageTurnBacksideStyle.mirrored,
+      opacity: current.pageTurnBacksideStyle.opacity,
+      paperColor: current.pageTurnBacksideStyle.paperColor
+    };
+  });
+
+  expect(faces.mirrored).toBe(true);
+  expect(faces.opacity).toBeLessThan(.3);
+  expect(faces.paperColor).toBe('#f6f3eb');
+
+  const drewBackside = await page.evaluate(() => new Promise(resolve => {
+    const engine = window.__study.getPageTurnEngine();
+    const current = engine.pageFlip.getPageCollection().getPage(engine.currentIndex);
+    const initialDrawCount = current.pageTurnBacksideDrawCount;
+    const target = document.querySelector('#app');
+    const touch = x => new Touch({ identifier: 30, target, clientX: x, clientY: 430 });
+    const start = touch(350);
+    const move = touch(165);
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [start], targetTouches: [start], changedTouches: [start] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [move], targetTouches: [move], changedTouches: [move] }));
+    requestAnimationFrame(() => resolve(current.pageTurnBacksideActive && current.pageTurnBacksideDrawCount > initialDrawCount));
+  }));
+
+  expect(drewBackside).toBe(true);
+});
+
+// The old HTML-mode tests for clip-path transitions, z-index ordering and
+// mask handoff remain obsolete: Canvas mode has no corresponding DOM layers.
 
 test('keeps next-day INP below 150ms with 4x CPU throttling', async ({ page, context }) => {
   const client = await context.newCDPSession(page);
@@ -316,7 +351,7 @@ test('keeps a viewport-sized flip engine across scrolling and the short Saturday
   // even starts — on top of the margin noted in "keeps both swipe
   // directions animated..." above, so this needs more headroom than a
   // same-page swipe does.
-  await page.waitForTimeout(900);
+  await page.waitForFunction(() => window.__study.isPageTurnReady());
 
   await page.evaluate(() => {
     const target = document.querySelector('#app');
@@ -411,11 +446,9 @@ for (const viewport of [
     // The touchmove handler itself stays cheap regardless of viewport size —
     // rasterization happens ahead of time during prewarm, not on this call
     // stack — but drawImage()'ing the flip frame onto a canvas whose backing
-    // store is sized to this (synthetic, up to 3840x2160 CSS px) viewport
-    // times DPR is real per-frame GPU/CPU cost that a realistic phone
-    // viewport never pays. 150ms matches the INP budget used elsewhere
-    // ("keeps next-day INP below 150ms..."); this is not a phone-realistic
-    // interaction latency budget.
+    // store is sized to this synthetic viewport. The renderer caps its pixel
+    // budget for these oversized canvases; 150ms matches the INP budget used
+    // elsewhere while realistic phone-sized turns retain their full DPR.
     await openSaturday();
     const forward = await startSwipe(1, 51);
     expect(forward.moveDuration).toBeLessThan(150);
@@ -493,7 +526,8 @@ test('supports repeated touch swipes without moving the page canvas', async ({ p
       target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [end] }));
     });
     await expect(page.locator('.date-heading strong')).toBeVisible();
-    const canvas = await page.locator('.page').evaluate(element => {
+    const canvas = await page.evaluate(() => {
+      const element = document.querySelector('#app > .page');
       const rect = element.getBoundingClientRect();
       return { left: rect.left, right: rect.right, width: rect.width, viewport: innerWidth, transform: getComputedStyle(element).transform };
     });

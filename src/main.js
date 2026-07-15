@@ -271,10 +271,11 @@ function saturdayItems(date) {
 }
 
 function dateHeading(date, subtitle) {
+  const turnBusy = Boolean(activePageTurn || pendingProgrammaticTurn);
   return `<div class="date-heading">
-    <button class="day-arrow prev" data-action="prev-day" aria-label="上一天" ${date <= START ? 'disabled' : ''}>${icons.arrow}</button>
+    <button class="day-arrow prev" data-action="prev-day" aria-label="上一天" ${date <= START || turnBusy ? 'disabled' : ''}>${icons.arrow}</button>
     <div><strong>${formatDate(date)}</strong><span>星期${WEEKDAYS[date.getDay()]} · ${subtitle}</span></div>
-    <button class="day-arrow" data-action="next-day" aria-label="下一天" ${date >= END ? 'disabled' : ''}>${icons.arrow}</button>
+    <button class="day-arrow" data-action="next-day" aria-label="下一天" ${date >= END || turnBusy ? 'disabled' : ''}>${icons.arrow}</button>
   </div>`;
 }
 
@@ -816,6 +817,8 @@ let pageTurnPrewarmTimer = 0;
 let pageTurnPrepareActive = false;
 let pageTurnPrepareQueued = false;
 let pageTurnContentEpoch = 0;
+let pendingProgrammaticTurn = null;
+let pendingProgrammaticTurnTimer = 0;
 const pageTurnImageCache = { signature: '', epoch: -1, hrefs: new Map() };
 const displayMotionProfile = {
   refreshRate: 60,
@@ -870,6 +873,13 @@ window.__study.motionProfileForFrameTime = motionProfileForFrameTime;
 window.__study.applyMotionFrameTime = applyDisplayMotionProfile;
 window.__study.getPageTurnCanvas = () => pageTurnEngine?.pageFlip?.getUI()?.getCanvas();
 window.__study.getPageTurnEngine = () => pageTurnEngine;
+window.__study.isPageTurnReady = () => {
+  const pageTop = document.querySelector('#app > .page')?.getBoundingClientRect().top;
+  return Boolean(
+    pageTurnEngine && !pageTurnDirty && pageTurnEngine.preparedDate === dateKey(selectedDate) &&
+    Number.isFinite(pageTop) && Math.abs(pageTurnEngine.contentOffsetY - pageTop) <= 1
+  );
+};
 
 // Rendering an SVG foreignObject through an <img>/Image (needed below to get
 // a bitmap onto a canvas) turned out to be unreliable with this app's full
@@ -1064,11 +1074,14 @@ window.__study.getPageTurnFontState = () => {
   const source = document.querySelector('.page');
   const snapshot = source ? clonePageSnapshot(source, 'font-state') : null;
   const rasterStyles = snapshot ? pageTurnRelevantStyles(snapshot) : '';
+  const dateHeading = source?.querySelector('.date-heading strong');
   return {
     mode: pageTurnEmbeddedFontCss ? 'embedded-webfonts' : 'role-preserving-fallback',
     forcesUniversalFont: /\.page-turn-raster-root\s*,\s*\.page-turn-raster-root\s+\*\s*\{[^}]*font-family/i.test(rasterStyles),
     serifStack: getComputedStyle(document.documentElement).getPropertyValue('--font-serif').trim(),
-    sansStack: getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim()
+    sansStack: getComputedStyle(document.documentElement).getPropertyValue('--font-sans').trim(),
+    numericStack: getComputedStyle(document.documentElement).getPropertyValue('--font-numeric').trim(),
+    dateFamily: dateHeading ? getComputedStyle(dateHeading).fontFamily : ''
   };
 };
 
@@ -1088,6 +1101,7 @@ function pageSnapshotForDate(date) {
 
 function preparePageTurnSnapshot(snapshot, pageWidth) {
   const measureHost = document.createElement('div');
+  measureHost.dataset.pageTurnMeasure = '';
   Object.assign(measureHost.style, {
     position: 'fixed',
     zIndex: '-1',
@@ -1130,7 +1144,12 @@ function preparePageTurnSnapshot(snapshot, pageWidth) {
   }
 }
 
-const pageTurnDpr = Math.min(window.devicePixelRatio || 1, 3.5);
+const pageTurnDeviceDpr = Math.min(window.devicePixelRatio || 1, 3.5);
+const PAGE_TURN_PIXEL_BUDGET = 6_000_000;
+const pageTurnDprForSize = (width, height) => Math.max(1, Math.min(
+  pageTurnDeviceDpr,
+  Math.sqrt(PAGE_TURN_PIXEL_BUDGET / Math.max(1, width * height))
+));
 
 // page-flip's CanvasUI sizes the canvas backing store to the CSS pixel rect
 // (canvas.width = parseInt(computedStyle.width)), not devicePixelRatio — on
@@ -1143,12 +1162,65 @@ function fixPageTurnCanvasDpr(pageFlip) {
   const canvas = pageFlip.getUI().getCanvas();
   const cssWidth = parseInt(getComputedStyle(canvas).width, 10);
   const cssHeight = parseInt(getComputedStyle(canvas).height, 10);
+  const pageTurnDpr = pageTurnDprForSize(cssWidth, cssHeight);
   canvas.width = Math.round(cssWidth * pageTurnDpr);
   canvas.height = Math.round(cssHeight * pageTurnDpr);
   canvas.getContext('2d').scale(pageTurnDpr, pageTurnDpr);
 }
 
+function installPageTurnBacksides(pageFlip) {
+  const context = pageFlip.getRender().getContext();
+  const paperColor = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim() || '#f6f3eb';
+  pageFlip.getPageCollection().getPages().forEach(page => {
+    const drawFront = page.draw.bind(page);
+    page.pageTurnBacksideActive = false;
+    page.pageTurnBacksideStyle = { mirrored: true, opacity: .24, paperColor };
+    page.pageTurnBacksideDrawCount = 0;
+    page.draw = (...args) => {
+      if (!page.pageTurnBacksideActive) {
+        drawFront(...args);
+        return;
+      }
+      const drawImage = context.drawImage.bind(context);
+      context.drawImage = (image, x, y, width, height) => {
+        if (image !== page.image) return drawImage(image, x, y, width, height);
+        page.pageTurnBacksideDrawCount++;
+        context.save();
+        context.fillStyle = paperColor;
+        context.fillRect(x, y, width, height);
+        const paperShade = context.createLinearGradient(x, 0, x + width, 0);
+        paperShade.addColorStop(0, 'rgba(70,68,61,.035)');
+        paperShade.addColorStop(.14, 'rgba(70,68,61,0)');
+        paperShade.addColorStop(.86, 'rgba(70,68,61,0)');
+        paperShade.addColorStop(1, 'rgba(70,68,61,.025)');
+        context.fillStyle = paperShade;
+        context.fillRect(x, y, width, height);
+        context.globalAlpha = .24;
+        context.translate(x + width, y);
+        context.scale(-1, 1);
+        drawImage(image, 0, 0, width, height);
+        context.restore();
+      };
+      try { drawFront(...args); }
+      finally { context.drawImage = drawImage; }
+    };
+  });
+}
+
+function clearPageTurnBackside(engine) {
+  engine.pageFlip.getPageCollection().getPages().forEach(page => {
+    page.pageTurnBacksideActive = false;
+  });
+}
+
+function showPageTurnBackside(engine) {
+  clearPageTurnBackside(engine);
+  const page = engine.pageFlip.getPageCollection().getPage(engine.currentIndex);
+  page.pageTurnBacksideActive = true;
+}
+
 function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, hrefs) {
+  document.querySelector('.page-turn-pending')?.remove();
   const host = document.createElement('div');
   host.className = 'page-turn-host';
   host.dataset.pageTurnModel = 'st-page-flip';
@@ -1211,6 +1283,7 @@ function createPageTurnEngine(oldRect, viewportTop, turnHeight, startPage, hrefs
   // there's nothing to see regardless of which of these actually lands last.
   pageFlip.on('init', () => fixPageTurnCanvasDpr(pageFlip));
   pageFlip.loadFromImages(hrefs);
+  installPageTurnBacksides(pageFlip);
   fixPageTurnCanvasDpr(pageFlip);
   pageFlip.update();
   fixPageTurnCanvasDpr(pageFlip);
@@ -1238,6 +1311,7 @@ async function buildPageTurnImages(date, oldPage, contentOffsetY, turnHeight) {
   if (inRange(next)) dates.push(next);
 
   const pageWidth = oldPage.getBoundingClientRect().width;
+  const pageTurnDpr = pageTurnDprForSize(pageWidth, turnHeight);
   const embeddedFontCss = pageTurnEmbeddedFontCss;
   // Per-date rasters are keyed by everything baked into the bitmap: page
   // size, scroll offset and font mode (the signature) plus the content
@@ -1360,6 +1434,7 @@ function applyPreparedPageTurnImages(built, oldRect, viewportTop, turnHeight, co
     pageTurnEngine.host.style.top = `${viewportTop}px`;
     pageTurnEngine.pageFlip.getRender().finishAnimation();
     pageTurnEngine.pageFlip.updateFromImages(built.hrefs);
+    installPageTurnBacksides(pageTurnEngine.pageFlip);
     pageTurnEngine.pageFlip.turnToPage(built.currentIndex);
     pageTurnEngine.pageFlip.update();
     fixPageTurnCanvasDpr(pageTurnEngine.pageFlip);
@@ -1372,7 +1447,17 @@ function applyPreparedPageTurnImages(built, oldRect, viewportTop, turnHeight, co
   pageTurnEngine.preparedDate = dateKey(date);
   pageTurnEngine.contentOffsetY = contentOffsetY;
   pageTurnDirty = false;
+  if (pendingProgrammaticTurn) requestAnimationFrame(resumePendingProgrammaticTurn);
   return pageTurnEngine;
+}
+
+function syncPageTurnNavigation() {
+  if (currentView !== 'day') return;
+  const turnBusy = Boolean(activePageTurn || pendingProgrammaticTurn);
+  const previous = document.querySelector('[data-action="prev-day"]');
+  const next = document.querySelector('[data-action="next-day"]');
+  if (previous) previous.disabled = selectedDate <= START || turnBusy;
+  if (next) next.disabled = selectedDate >= END || turnBusy;
 }
 
 function schedulePageTurnPrewarm(delay = 70) {
@@ -1436,6 +1521,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   if (targetIndex < 0 || targetIndex >= engine.dateKeys.length) return null;
   const activeField = document.activeElement;
   if (activeField?.matches?.('input, textarea, select, [contenteditable="true"]')) activeField.blur();
+  clearPageTurnBackside(engine);
   let progress = 0;
   let settled = false;
   let liveCommitted = false;
@@ -1463,10 +1549,13 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
     if (settled) return;
     settled = true;
     cancelAnimationFrame(cleanupFrame);
+    clearPageTurnBackside(engine);
     engine.host.style.visibility = 'hidden';
     document.body.classList.remove('page-turn-active');
     engine.controller = null;
     if (activePageTurn === controller) activePageTurn = null;
+    if (pendingProgrammaticTurn?.direction === direction) clearPendingProgrammaticTurn();
+    syncPageTurnNavigation();
     schedulePageTurnPrewarm(40);
   };
 
@@ -1490,6 +1579,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   const setProgress = value => {
     progress = Math.max(0, Math.min(1, value));
     if (!userTouchStarted) {
+      if (direction > 0) showPageTurnBackside(engine);
       engine.pageFlip.startUserTouch(startPoint);
       engine.pageFlip.userMove({ x: direction > 0 ? engine.width - 10 : 10, y: startY }, true);
       // userMove clones the flipping sheet with the full-page styles it had at
@@ -1546,6 +1636,7 @@ function createPageTurnController(engine, targetDate, direction, touchY = null) 
   document.body.classList.add('page-turn-active');
   engine.controller = controller;
   activePageTurn = controller;
+  syncPageTurnNavigation();
   return controller;
 }
 
@@ -1555,6 +1646,66 @@ function beginGesturePageTurn(direction, touchY) {
   if (!inRange(targetDate)) return null;
   const engine = getPreparedPageTurnEngine();
   return engine ? createPageTurnController(engine, targetDate, direction, touchY) : null;
+}
+
+function showPendingPageTurnHost(direction) {
+  const existingHost = pageTurnEngine?.host;
+  if (existingHost) {
+    existingHost.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+    return;
+  }
+  if (document.querySelector('.page-turn-pending')) return;
+  const page = document.querySelector('.page');
+  const rect = page?.getBoundingClientRect();
+  if (!rect) return;
+  const host = document.createElement('div');
+  host.className = 'page-turn-host page-turn-pending';
+  host.dataset.pageTurn = direction > 0 ? 'next' : 'prev';
+  host.dataset.pageTurnModel = 'st-page-flip';
+  host.setAttribute('aria-hidden', 'true');
+  host.inert = true;
+  Object.assign(host.style, {
+    position: 'fixed',
+    left: `${rect.left}px`,
+    top: '0',
+    width: `${rect.width}px`,
+    height: `${innerHeight}px`,
+    pointerEvents: 'none',
+    visibility: 'hidden'
+  });
+  document.body.append(host);
+}
+
+function clearPendingProgrammaticTurn() {
+  clearTimeout(pendingProgrammaticTurnTimer);
+  pendingProgrammaticTurnTimer = 0;
+  pendingProgrammaticTurn = null;
+  document.querySelector('.page-turn-pending')?.remove();
+}
+
+function queueProgrammaticTurn(direction, targetDate) {
+  if (pendingProgrammaticTurn) return;
+  pendingProgrammaticTurn = { direction, fromDate: dateKey(selectedDate), targetDate: new Date(targetDate) };
+  showPendingPageTurnHost(direction);
+  syncPageTurnNavigation();
+  schedulePageTurnPrewarm(0);
+  pendingProgrammaticTurnTimer = window.setTimeout(() => {
+    if (!pendingProgrammaticTurn || activePageTurn) return;
+    const target = new Date(pendingProgrammaticTurn.targetDate);
+    clearPendingProgrammaticTurn();
+    selectedDate = target;
+    render();
+    finishPageAnimations();
+  }, 2500);
+}
+
+function resumePendingProgrammaticTurn() {
+  const pending = pendingProgrammaticTurn;
+  if (!pending || activePageTurn || pending.fromDate !== dateKey(selectedDate)) return;
+  const engine = getPreparedPageTurnEngine();
+  if (!engine) return;
+  const turn = createPageTurnController(engine, pending.targetDate, pending.direction);
+  if (turn) requestAnimationFrame(() => turn.startProgrammatic());
 }
 
 function switchDay(direction) {
@@ -1572,9 +1723,7 @@ function switchDay(direction) {
   const engine = getPreparedPageTurnEngine();
   const turn = engine ? createPageTurnController(engine, next, direction) : null;
   if (!turn) {
-    selectedDate = next;
-    render();
-    finishPageAnimations();
+    queueProgrammaticTurn(direction, next);
     return;
   }
   requestAnimationFrame(() => turn?.startProgrammatic());
